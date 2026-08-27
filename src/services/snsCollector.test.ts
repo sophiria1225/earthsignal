@@ -6,8 +6,36 @@ import {
   deduplicateSocialPosts,
   extractLocationFromText,
   generateCellSocialSummary,
+  fetchLiveBlueskyPosts,
   mastodonHtmlToText,
 } from './snsCollector';
+
+test('Bluesky V2検索は一時的な403を再試行する', async () => {
+  const originalFetch = globalThis.fetch;
+  const requestedUrls: string[] = [];
+  let attempts = 0;
+  globalThis.fetch = async (input) => {
+    requestedUrls.push(String(input));
+    attempts += 1;
+    if (attempts === 1) return new Response('forbidden', { status: 403 });
+    return new Response(JSON.stringify({ posts: [] }), {
+      status: 200,
+      headers: { 'Content-Type': 'application/json' },
+    });
+  };
+  try {
+    const posts = await fetchLiveBlueskyPosts('地震雲', {
+      throwOnError: true,
+      retryDelayMs: 0,
+    });
+    assert.deepEqual(posts, []);
+    assert.equal(attempts, 2);
+    assert.match(requestedUrls[0], /app\.bsky\.feed\.searchPostsV2/);
+    assert.match(requestedUrls[0], /query=/);
+  } finally {
+    globalThis.fetch = originalFetch;
+  }
+});
 
 function makePost(overrides: Partial<SocialDerivedPost> = {}): SocialDerivedPost {
   return {

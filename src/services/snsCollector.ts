@@ -222,22 +222,39 @@ export async function fetchLiveBlueskyPosts(
     throwOnError?: boolean;
     serviceUrl?: 'https://api.bsky.app' | 'https://bsky.social';
     accessJwt?: string;
+    retryDelayMs?: number;
   } = {}
 ): Promise<SocialDerivedPost[]> {
   try {
     const serviceUrl = options.serviceUrl || 'https://api.bsky.app';
-    const url = `${serviceUrl}/xrpc/app.bsky.feed.searchPosts?q=${encodeURIComponent(query)}&limit=100&sort=latest&lang=ja`;
-    const res = await fetch(url, {
-      headers: {
-        Accept: 'application/json',
-        'User-Agent': 'EarthSignal/1.0 (public-earth-observation-research)',
-        ...(options.accessJwt ? { Authorization: `Bearer ${options.accessJwt}` } : {}),
-      },
-      signal: options.signal,
-    });
-    if (!res.ok) {
-      throw new Error(`Bluesky API returned ${res.status}`);
+    const url = new URL(`${serviceUrl}/xrpc/app.bsky.feed.searchPostsV2`);
+    url.searchParams.set('query', query);
+    url.searchParams.set('limit', '20');
+    url.searchParams.set('sort', 'recent');
+    url.searchParams.append('languages', 'ja');
+    url.searchParams.set('queryLanguage', 'ja');
+    url.searchParams.set('since', new Date(Date.now() - 24 * 60 * 60_000).toISOString());
+
+    let res: Response | null = null;
+    for (let attempt = 0; attempt < 3; attempt += 1) {
+      res = await fetch(url, {
+        headers: {
+          Accept: 'application/json',
+          'User-Agent': 'EarthSignal/1.0 (public-earth-observation-research)',
+          ...(options.accessJwt ? { Authorization: `Bearer ${options.accessJwt}` } : {}),
+        },
+        signal: options.signal,
+      });
+      if (res.ok) break;
+      const retryable = res.status === 403 || res.status === 429 || res.status >= 500;
+      if (!retryable || attempt === 2) throw new Error(`Bluesky API returned ${res.status}`);
+      const retryAfterSeconds = Number.parseFloat(res.headers.get('retry-after') || '');
+      const delayMs = Number.isFinite(retryAfterSeconds)
+        ? Math.min(3_000, retryAfterSeconds * 1000)
+        : (options.retryDelayMs ?? 600) * (attempt + 1);
+      await new Promise(resolve => setTimeout(resolve, delayMs));
     }
+    if (!res?.ok) throw new Error(`Bluesky API returned ${res?.status || 'no response'}`);
     const data = await res.json();
     const posts = data.posts || [];
 

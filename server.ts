@@ -214,7 +214,7 @@ async function startServer() {
     try {
 
     const blueskyQueries = [
-      '地震雲 OR 地鳴り OR 犬が吠える OR 鳥が騒ぐ OR 揺れた気がする',
+      '地震雲', '地鳴り', '犬が吠える', '鳥が騒ぐ', '揺れた気がする',
     ];
     const mastodonTags = ['地震雲', '地鳴り'];
     const mastodonInstances = (process.env.MASTODON_INSTANCES || 'https://mastodon.social,https://mstdn.jp')
@@ -250,17 +250,21 @@ async function startServer() {
       }))),
     ];
 
-    // Blueskyは複数語を1リクエストへまとめ、公開検索APIのレート制限を尊重する。
+    // OR検索はBluesky側の既知不具合で0件になるため語ごとに検索し、短い間隔を空ける。
     // Mastodonはインスタンスが分散しているので並列取得して待ち時間を抑える。
     const blueskyTasks = tasks.filter(task => task.source === 'bluesky');
     const mastodonTasks = tasks.filter(task => task.source === 'mastodon');
     const runSequentially = async (items: CollectionTask[]) => {
       const settled: PromiseSettledResult<SocialDerivedPost[]>[] = [];
-      for (const item of items) {
+      for (let index = 0; index < items.length; index += 1) {
+        const item = items[index];
         try {
           settled.push({ status: 'fulfilled', value: await item.run() });
         } catch (reason) {
           settled.push({ status: 'rejected', reason });
+        }
+        if (index < items.length - 1) {
+          await new Promise(resolve => setTimeout(resolve, 300));
         }
       }
       return settled;
@@ -317,7 +321,11 @@ async function startServer() {
       isLive: anySourceLive,
       sources: statuses,
     };
-    socialCache = { expiresAt: Date.now() + SOCIAL_CACHE_TTL_MS, response };
+    const allConfiguredSourcesLive = statuses.every(status => status.ok);
+    socialCache = {
+      expiresAt: Date.now() + (allConfiguredSourcesLive ? SOCIAL_CACHE_TTL_MS : 30_000),
+      response,
+    };
     res.setHeader('Cache-Control', 'public, max-age=30, stale-while-revalidate=120');
     return res.status(anySourceLive ? 200 : 502).json(
       anySourceLive ? response : { ...response, error: '利用可能なSNS公開APIがありません' }
