@@ -150,6 +150,10 @@ export interface SocialHourlySummary {
   qualityScore: number; // 平均情報品質 0-1
   anomalyScore: number | null; // 履歴ベースラインがある場合のみ 0 - 100
   baselineSampleCount: number; // 同時間帯比較に実際に採用した別日数
+  animalAnomalyScore: number | null; // 動物カテゴリ投稿数の平常時からの差（地震発生確率ではない）
+  animalBaselineSampleCount: number;
+  animalBaselineMedian: number | null;
+  animalBaselineMad: number | null;
   categories: Record<SocialCategory, number>;
   sources: Record<SocialSourceType, number>;
   analysisModes: Record<AnalysisMode, number>;

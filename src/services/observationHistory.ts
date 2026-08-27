@@ -15,6 +15,8 @@ export interface ObservationSnapshot {
   earthquakeScore: number | null;
   socialScore: number | null;
   socialPostCount: number | null;
+  // v1の既存履歴と互換性を保つため追加カウントはoptionalにする。
+  socialAnimalPostCount?: number | null;
   cloudCoverHigh: number | null;
   pressureChange24h: number | null;
   temperature: number | null;
@@ -51,6 +53,7 @@ function isSnapshot(value: unknown): value is ObservationSnapshot {
     && numericOrNull(item.earthquakeScore)
     && numericOrNull(item.socialScore)
     && numericOrNull(item.socialPostCount)
+    && (item.socialAnimalPostCount === undefined || numericOrNull(item.socialAnimalPostCount))
     && numericOrNull(item.cloudCoverHigh)
     && numericOrNull(item.pressureChange24h)
     && numericOrNull(item.temperature);
@@ -104,6 +107,7 @@ export function createObservationSnapshots(
     earthquakeScore: cell.currentScore.earthquakeActivityScore,
     socialScore: cell.currentScore.socialScore,
     socialPostCount: options.socialLive ? (cell.socialSummary?.totalPosts || 0) : null,
+    socialAnimalPostCount: options.socialLive ? (cell.socialSummary?.categories.animal || 0) : null,
     cloudCoverHigh: !cell.weather.isStale && Number.isFinite(cell.weather.cloudCoverHigh) ? cell.weather.cloudCoverHigh : null,
     pressureChange24h: !cell.weather.isStale && Number.isFinite(cell.weather.pressureChange24h) ? cell.weather.pressureChange24h! : null,
     temperature: !cell.weather.isStale && Number.isFinite(cell.weather.temperature) ? cell.weather.temperature : null,
@@ -140,11 +144,12 @@ function japanTimeParts(date: Date): { dayKey: string; hour: number } {
  * 現在と同じ3時間帯の別日スナップショットを最大30日分使う。
  * アプリを開いた頻度の偏りを避けるため、1日につき最新1標本だけを採用する。
  */
-export function deriveSocialBaseline(
+function deriveCountBaseline(
   cellId: string,
-  currentPostCount: number,
+  currentCount: number,
   history: ObservationSnapshot[],
-  now = new Date()
+  now: Date,
+  selectCount: (snapshot: ObservationSnapshot) => number | null | undefined
 ): SocialBaselineResult {
   const currentJapanTime = japanTimeParts(now);
   const currentBand = Math.floor(currentJapanTime.hour / 3);
@@ -153,6 +158,8 @@ export function deriveSocialBaseline(
 
   for (const snapshot of history) {
     if (snapshot.cellId !== cellId) continue;
+    const count = selectCount(snapshot);
+    if (typeof count !== 'number' || !Number.isFinite(count)) continue;
     const capturedAt = new Date(snapshot.capturedAt);
     if (!Number.isFinite(capturedAt.getTime())) continue;
     const capturedJapanTime = japanTimeParts(capturedAt);
@@ -166,7 +173,7 @@ export function deriveSocialBaseline(
   const values = [...byDay.values()]
     .sort((a, b) => Date.parse(b.capturedAt) - Date.parse(a.capturedAt))
     .slice(0, 30)
-    .map(snapshot => snapshot.socialPostCount)
+    .map(selectCount)
     .filter((value): value is number => typeof value === 'number' && Number.isFinite(value));
   if (values.length < 7) {
     return { anomalyScore: null, sampleCount: values.length, median: null, mad: null };
@@ -175,11 +182,30 @@ export function deriveSocialBaseline(
   const center = median(values);
   const mad = Math.max(1, median(values.map(value => Math.abs(value - center))));
   return {
-    anomalyScore: robustAnomalyScore(currentPostCount, center, mad, 'up'),
+    anomalyScore: robustAnomalyScore(currentCount, center, mad, 'up'),
     sampleCount: values.length,
     median: Math.round(center * 10) / 10,
     mad: Math.round(mad * 10) / 10,
   };
+}
+
+export function deriveSocialBaseline(
+  cellId: string,
+  currentPostCount: number,
+  history: ObservationSnapshot[],
+  now = new Date()
+): SocialBaselineResult {
+  return deriveCountBaseline(cellId, currentPostCount, history, now, snapshot => snapshot.socialPostCount);
+}
+
+/** 動物・鳥類のSNS投稿数だけを同時間帯の別日と比較する。 */
+export function deriveAnimalBehaviorBaseline(
+  cellId: string,
+  currentPostCount: number,
+  history: ObservationSnapshot[],
+  now = new Date()
+): SocialBaselineResult {
+  return deriveCountBaseline(cellId, currentPostCount, history, now, snapshot => snapshot.socialAnimalPostCount);
 }
 
 export function applySocialBaseline(
@@ -199,5 +225,18 @@ export function applySocialBaseline(
     anomalyScore: baseline.anomalyScore,
     baselineSampleCount: baseline.sampleCount,
     notice: `同じ3時間帯の別日${baseline.sampleCount}日分と比較（中央値 ${baseline.median}件、MAD ${baseline.mad}件）。投稿増加は地震発生確率ではありません。`,
+  };
+}
+
+export function applyAnimalBehaviorBaseline(
+  summary: SocialHourlySummary,
+  baseline: SocialBaselineResult
+): SocialHourlySummary {
+  return {
+    ...summary,
+    animalAnomalyScore: baseline.anomalyScore,
+    animalBaselineSampleCount: baseline.sampleCount,
+    animalBaselineMedian: baseline.median,
+    animalBaselineMad: baseline.mad,
   };
 }

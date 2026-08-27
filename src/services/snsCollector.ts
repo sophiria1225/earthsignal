@@ -134,7 +134,10 @@ export function classifyTextByRules(text: string): {
 
   // 2. 過去談・比喩判定
   const isHistorical = HISTORICAL_REGEX.test(norm);
-  const isNegated = NEGATION_REGEX.test(norm);
+  // 「犬/猫が落ち着かない」の「ない」は否定ではなく観測対象の行動語。
+  // この句だけ置換し、「ではない」「デマ」等の否定文は残す。
+  const negationTarget = norm.replace(/(犬|猫)が落ち着かない/g, '$1が不穏');
+  const isNegated = NEGATION_REGEX.test(negationTarget);
   const isMetaphorical = METAPHOR_CONTEXT_REGEX.test(norm);
   const isIndirectQuotation = QUOTATION_REGEX.test(norm) && !DIRECT_OBSERVATION_REGEX.test(norm);
 
@@ -524,6 +527,10 @@ export function generateCellSocialSummary(
     // SNSの平常時履歴は永続DBが整うまで推測値を置かない。
     anomalyScore: null,
     baselineSampleCount: 0,
+    animalAnomalyScore: null,
+    animalBaselineSampleCount: 0,
+    animalBaselineMedian: null,
+    animalBaselineMad: null,
     categories,
     sources,
     analysisModes,

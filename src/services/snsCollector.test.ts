@@ -120,6 +120,13 @@ test('原因が雷と分かる音や比喩表現を観測投稿から除外す�
   assert.equal(classifyTextByRules('東京で原因不明の地鳴りが続いている').category, 'sound');
 });
 
+test('犬猫鳥類だけでなく魚類やクジラの行動言及も動物観測に分類する', () => {
+  assert.equal(classifyTextByRules('千葉の海岸で魚が大量に集まっている').category, 'animal');
+  assert.equal(classifyTextByRules('宮崎でクジラが打ち上げられた').category, 'animal');
+  assert.equal(classifyTextByRules('猫が落ち着かないで隠れる').category, 'animal');
+  assert.equal(classifyTextByRules('猫が落ち着かないというのはデマ').category, 'unrelated');
+});
+
 test('引用記事だけの言及は除外し、本人の現在観測は残す', () => {
   assert.equal(classifyTextByRules('ニュース記事まとめ: 東京で地鳴り').category, 'unrelated');
   assert.equal(classifyTextByRules('ニュースを見たが、今も東京で地鳴りが聞こえる').category, 'sound');

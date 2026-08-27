@@ -11,8 +11,10 @@ import { calculateRobustAnomalyScore, filterCurrentObservations } from './servic
 import { fetchLiveSocialPosts, generateCellSocialSummary } from './services/snsCollector';
 import {
   ObservationSnapshot,
+  applyAnimalBehaviorBaseline,
   applySocialBaseline,
   createObservationSnapshots,
+  deriveAnimalBehaviorBaseline,
   deriveSocialBaseline,
   loadObservationHistory,
   mergeObservationSnapshots,
@@ -212,9 +214,17 @@ export default function App() {
             : { ...cell.weather, isStale: true };
           const rawSocialSummary = generateCellSocialSummary(cell.id, freshSocialPosts, '6h');
           const socialSummary = socialResult.isLive
-            ? applySocialBaseline(
-                rawSocialSummary,
-                deriveSocialBaseline(cell.id, rawSocialSummary.totalPosts, observationHistory, capturedAt)
+            ? applyAnimalBehaviorBaseline(
+                applySocialBaseline(
+                  rawSocialSummary,
+                  deriveSocialBaseline(cell.id, rawSocialSummary.totalPosts, observationHistory, capturedAt)
+                ),
+                deriveAnimalBehaviorBaseline(
+                  cell.id,
+                  rawSocialSummary.categories.animal,
+                  observationHistory,
+                  capturedAt
+                )
               )
             : cell.socialSummary || rawSocialSummary;
           const updated = { ...cell, weather, socialSummary };
@@ -379,6 +389,7 @@ export default function App() {
               allCells={cells}
               onSelectCell={handleSelectCell}
               posts={socialPosts}
+              observations={observations}
               onPostsChange={(posts, result) => {
                 const capturedAt = new Date();
                 setSocialPosts(posts);
@@ -415,9 +426,17 @@ export default function App() {
                   : [];
                 const updatedCells = cells.map(cell => {
                     const rawSocialSummary = generateCellSocialSummary(cell.id, posts, '6h');
-                    const socialSummary = applySocialBaseline(
-                      rawSocialSummary,
-                      deriveSocialBaseline(cell.id, rawSocialSummary.totalPosts, observationHistory, capturedAt)
+                    const socialSummary = applyAnimalBehaviorBaseline(
+                      applySocialBaseline(
+                        rawSocialSummary,
+                        deriveSocialBaseline(cell.id, rawSocialSummary.totalPosts, observationHistory, capturedAt)
+                      ),
+                      deriveAnimalBehaviorBaseline(
+                        cell.id,
+                        rawSocialSummary.categories.animal,
+                        observationHistory,
+                        capturedAt
+                      )
                     );
                     return {
                     ...cell,

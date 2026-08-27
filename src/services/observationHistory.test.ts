@@ -1,6 +1,7 @@
 import assert from 'node:assert/strict';
 import test from 'node:test';
 import {
+  deriveAnimalBehaviorBaseline,
   deriveSocialBaseline,
   mergeObservationSnapshots,
   ObservationSnapshot,
@@ -32,6 +33,13 @@ test('壊れた履歴JSONや別形式を安全に無視する', () => {
   assert.deepEqual(parseObservationHistory(JSON.stringify([{ ...snapshot(1, 2), overallScore: 'high' }])), []);
 });
 
+test('動物カウント追加前の履歴もそのまま読み込める', () => {
+  const legacy = snapshot(1, 2);
+  const parsed = parseObservationHistory(JSON.stringify([legacy]));
+  assert.equal(parsed.length, 1);
+  assert.equal(parsed[0].socialAnimalPostCount, undefined);
+});
+
 test('同じ地域・時間バケットは最新値へ置き換える', () => {
   const oldPoint = snapshot(1, 2);
   const newPoint = { ...oldPoint, capturedAt: new Date(2026, 7, 27, 3, 50).toISOString(), socialPostCount: 5 };
@@ -61,6 +69,33 @@ test('SNS履歴が7日あれば実測値から異常度を算出する', () => {
   assert.equal(result.sampleCount, 7);
   assert.equal(result.median, 2);
   assert.ok(result.anomalyScore !== null && result.anomalyScore > 90);
+});
+
+test('動物投稿はSNS総数と分けて平常時と比較する', () => {
+  const history = Array.from({ length: 7 }, (_, index) => ({
+    ...snapshot(index + 1, 20),
+    socialAnimalPostCount: 1,
+  }));
+  const result = deriveAnimalBehaviorBaseline(
+    'cell_tokyo_01',
+    8,
+    history,
+    new Date(2026, 7, 28, 3, 30)
+  );
+  assert.equal(result.sampleCount, 7);
+  assert.equal(result.median, 1);
+  assert.ok(result.anomalyScore !== null && result.anomalyScore > 90);
+});
+
+test('旧履歴のSNS総数を動物投稿として誤用しない', () => {
+  const result = deriveAnimalBehaviorBaseline(
+    'cell_tokyo_01',
+    8,
+    Array.from({ length: 7 }, (_, index) => snapshot(index + 1, 20)),
+    new Date(2026, 7, 28, 3, 30)
+  );
+  assert.equal(result.sampleCount, 0);
+  assert.equal(result.anomalyScore, null);
 });
 
 test('端末タイムゾーンに依存せず日本時間の同時間帯を比較する', () => {

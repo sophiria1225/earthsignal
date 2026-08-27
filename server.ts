@@ -389,7 +389,8 @@ async function startServer() {
 
     const blueskyQueries = [
       '地震雲', '変な雲', '地鳴り', '犬が吠える', '猫が落ち着かない',
-      '鳥が騒ぐ', 'カラスが騒ぐ', '揺れた気がする', '井戸水が濁った',
+      '鳥が騒ぐ', '鳥が大量', 'カラスが騒ぐ', '猫が隠れる', '魚が大量',
+      'クジラが打ち上げ', '揺れた気がする', '井戸水が濁った',
     ];
     const mastodonTags = ['地震雲', '地鳴り'];
     const mastodonInstances = (process.env.MASTODON_INSTANCES || 'https://mastodon.social,https://mstdn.jp')

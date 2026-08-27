@@ -1,5 +1,5 @@
 import React, { useState, useEffect, useRef } from 'react';
-import { GeoCell, SocialCategory, SocialDerivedPost, SocialFetchResponse, SocialFetchSourceStatus, SocialHourlySummary, SocialSourceType } from '../types';
+import { GeoCell, Observation, SocialCategory, SocialDerivedPost, SocialFetchResponse, SocialFetchSourceStatus, SocialHourlySummary, SocialSourceType } from '../types';
 import { 
   KEYWORD_DICTIONARY, 
   fetchLiveSocialPosts,
@@ -24,7 +24,10 @@ import {
   Globe,
   Tv,
   Copy,
-  Check
+  Check,
+  Database,
+  PawPrint,
+  UsersRound
 } from 'lucide-react';
 import { BlueskyPersonalFeed } from './BlueskyPersonalFeed';
 
@@ -33,6 +36,7 @@ interface Props {
   allCells: GeoCell[];
   onSelectCell: (cell: GeoCell) => void;
   posts?: SocialDerivedPost[];
+  observations?: Observation[];
   onPostsChange?: (posts: SocialDerivedPost[], response: SocialFetchResponse) => void;
 }
 
@@ -53,6 +57,10 @@ const SOCIAL_SEARCH_SHORTCUTS: SocialSearchShortcut[] = [
   { source: 'bluesky', category: 'sound', query: KEYWORD_DICTIONARY.sound[0], label: '地鳴り', locationAware: true },
   { source: 'bluesky', category: 'animal', query: KEYWORD_DICTIONARY.animal[0], label: '犬が吠える', locationAware: true },
   { source: 'bluesky', category: 'animal', query: KEYWORD_DICTIONARY.animal[3], label: '鳥が騒ぐ', locationAware: true },
+  { source: 'bluesky', category: 'animal', query: KEYWORD_DICTIONARY.animal[4], label: '鳥が大量', locationAware: true },
+  { source: 'bluesky', category: 'animal', query: KEYWORD_DICTIONARY.animal[8], label: '猫が隠れる', locationAware: true },
+  { source: 'bluesky', category: 'animal', query: KEYWORD_DICTIONARY.animal[9], label: '魚が大量', locationAware: true },
+  { source: 'bluesky', category: 'animal', query: KEYWORD_DICTIONARY.animal[10], label: 'クジラが打ち上げ', locationAware: true },
   { source: 'bluesky', category: 'shaking', query: KEYWORD_DICTIONARY.shaking[0], label: '揺れた気がする', locationAware: true },
   { source: 'bluesky', category: 'water', query: KEYWORD_DICTIONARY.water[0], label: '井戸水が濁った', locationAware: true },
   { source: 'mastodon', category: 'cloud', query: '地震雲', label: '#地震雲' },
@@ -63,11 +71,30 @@ const SOCIAL_SEARCH_SHORTCUTS: SocialSearchShortcut[] = [
   { source: 'misskey', category: 'sound', query: '地鳴り', label: '地鳴り', locationAware: true },
 ];
 
+const ANIMAL_TAG_PATTERNS = [
+  { label: '犬', pattern: /(犬|イヌ)/ },
+  { label: '猫', pattern: /(猫|ネコ)/ },
+  { label: '鳥類', pattern: /(鳥|野鳥)/ },
+  { label: 'カラス', pattern: /カラス/ },
+  { label: '魚類', pattern: /(魚|イワシ)/ },
+  { label: 'クジラ・イルカ', pattern: /(クジラ|鯨|イルカ)/ },
+  { label: '虫・カエル', pattern: /(虫|カエル)/ },
+];
+
+const ANIMAL_BEHAVIOR_PATTERNS = [
+  { label: '連続鳴き・遠吠え', pattern: /(遠吠え|吠え続|鳴き続|ずっと吠)/ },
+  { label: '落ち着かない', pattern: /落ち着かない/ },
+  { label: '騒ぐ・集団行動', pattern: /(騒ぐ|大量|群れ|一斉)/ },
+  { label: '隠れる・姿を消す', pattern: /(隠れる|姿を消|急に静か)/ },
+  { label: '打ち上げ・漂着', pattern: /(打ち上げ|漂着)/ },
+];
+
 export const SocialObservationView: React.FC<Props> = ({
   selectedCell,
   allCells,
   onSelectCell,
   posts: initialPosts = [],
+  observations = [],
   onPostsChange,
 }) => {
   const [selectedWindow, setSelectedWindow] = useState<'1h' | '6h' | '24h'>('6h');
@@ -157,17 +184,82 @@ export const SocialObservationView: React.FC<Props> = ({
     ? {
         ...rawSummary,
         anomalyScore: selectedCell.socialSummary.anomalyScore,
+        animalAnomalyScore: selectedCell.socialSummary.animalAnomalyScore,
+        animalBaselineSampleCount: selectedCell.socialSummary.animalBaselineSampleCount,
+        animalBaselineMedian: selectedCell.socialSummary.animalBaselineMedian,
+        animalBaselineMad: selectedCell.socialSummary.animalBaselineMad,
         notice: selectedCell.socialSummary.notice,
       }
     : rawSummary;
 
+  const windowHours = selectedWindow === '1h' ? 1 : selectedWindow === '6h' ? 6 : 24;
+  const windowCutoff = Date.now() - windowHours * 60 * 60_000;
   const windowedPosts = postsList.filter(p => {
-    const windowHours = selectedWindow === '1h' ? 1 : selectedWindow === '6h' ? 6 : 24;
-    if (new Date(p.postedAt).getTime() < Date.now() - windowHours * 60 * 60_000) return false;
+    if (new Date(p.postedAt).getTime() < windowCutoff) return false;
     if (selectedCategory !== 'all' && p.category !== selectedCategory) return false;
     if (selectedSource !== 'all' && p.source !== selectedSource) return false;
     return true;
   });
+
+  const nationalAnimalPosts = postsList.filter(post =>
+    post.category === 'animal'
+    && !post.isPostEventReaction
+    && new Date(post.postedAt).getTime() >= windowCutoff
+  );
+  const regionalAnimalPosts = nationalAnimalPosts.filter(post => post.h3Cell === selectedCell.id);
+  const regionalAnimalActorCount = new Set(
+    regionalAnimalPosts.map(post => post.actorIdHash || post.sourceIdHash)
+  ).size;
+  const localAnimalCategories = new Set(['animal_active', 'animal_quiet', 'bird_flock']);
+  const localAnimalObservations = observations.filter(observation =>
+    observation.cellId === selectedCell.id
+    && observation.status === 'finalized'
+    && observation.type === 'citizen_report'
+    && observation.citizenReport
+    && localAnimalCategories.has(observation.citizenReport.category)
+    && new Date(observation.observedAt).getTime() >= windowCutoff
+  );
+  const animalTexts = [
+    ...regionalAnimalPosts.map(post => post.temporaryExcerpt || ''),
+    ...localAnimalObservations.map(observation => observation.citizenReport?.description || ''),
+  ];
+  const animalTags = ANIMAL_TAG_PATTERNS.map(item => ({
+    label: item.label,
+    count: animalTexts.filter(text => item.pattern.test(text)).length,
+  })).filter(item => item.count > 0);
+  const animalBehaviors = ANIMAL_BEHAVIOR_PATTERNS.map(item => ({
+    label: item.label,
+    count: animalTexts.filter(text => item.pattern.test(text)).length,
+  })).filter(item => item.count > 0);
+  const animalSignalPresentation = selectedWindow !== '6h'
+    ? {
+        label: '6時間表示で平常時比較',
+        color: 'text-slate-700 dark:text-slate-200',
+        background: 'bg-slate-100 dark:bg-slate-800',
+      }
+    : summary.animalAnomalyScore === null
+    ? {
+        label: summary.categories.animal >= 3 && regionalAnimalActorCount >= 2 ? '複数観測・比較履歴蓄積中' : '比較履歴を蓄積中',
+        color: 'text-slate-700 dark:text-slate-200',
+        background: 'bg-slate-100 dark:bg-slate-800',
+      }
+    : summary.animalAnomalyScore >= 65
+      ? {
+          label: '平常時より大きく増加',
+          color: 'text-rose-700 dark:text-rose-300',
+          background: 'bg-rose-100 dark:bg-rose-950/60',
+        }
+      : summary.animalAnomalyScore >= 35
+        ? {
+            label: '平常時よりやや増加',
+            color: 'text-amber-700 dark:text-amber-300',
+            background: 'bg-amber-100 dark:bg-amber-950/60',
+          }
+        : {
+            label: '平常の変動範囲',
+            color: 'text-emerald-700 dark:text-emerald-300',
+            background: 'bg-emerald-100 dark:bg-emerald-950/60',
+          };
   const regionalPosts = windowedPosts.filter(p => p.h3Cell === selectedCell.id);
   const visiblePosts = recordView === 'regional' ? regionalPosts : windowedPosts;
   const visibleSearchShortcuts = SOCIAL_SEARCH_SHORTCUTS.filter(shortcut => {
@@ -400,6 +492,115 @@ export const SocialObservationView: React.FC<Props> = ({
         </div>
       </div>
 
+      {/* 動物・生物の行動変化を予知と切り離して可視化 */}
+      <section className="bg-white dark:bg-slate-900 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm overflow-hidden">
+        <div className="p-5 space-y-4">
+          <div className="flex flex-col lg:flex-row lg:items-start justify-between gap-3">
+            <div className="space-y-1">
+              <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-2">
+                <PawPrint className="w-5 h-5 text-emerald-600 dark:text-emerald-400" />
+                生物行動シグナル
+              </h3>
+              <p className="text-xs text-slate-500">
+                {selectedCell.name}のSNS公開投稿と端末内市民観測から、動物・鳥類の「普段と違う」行動言及を集約します。
+              </p>
+            </div>
+            <span className={`self-start px-3 py-1.5 rounded-full text-xs font-bold ${animalSignalPresentation.background} ${animalSignalPresentation.color}`}>
+              {animalSignalPresentation.label}
+            </span>
+          </div>
+
+          <div className="grid grid-cols-2 lg:grid-cols-4 gap-3">
+            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700/70">
+              <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                <PawPrint className="w-3.5 h-3.5" /> 地域内SNS
+              </div>
+              <p className="mt-1 text-xl font-bold text-slate-900 dark:text-white">{summary.categories.animal}<span className="ml-1 text-xs font-normal text-slate-400">件</span></p>
+            </div>
+            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700/70">
+              <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                <UsersRound className="w-3.5 h-3.5" /> 独立投稿者
+              </div>
+              <p className="mt-1 text-xl font-bold text-slate-900 dark:text-white">{regionalAnimalActorCount}<span className="ml-1 text-xs font-normal text-slate-400">名</span></p>
+            </div>
+            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700/70">
+              <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                <Globe className="w-3.5 h-3.5" /> 全国SNS参考
+              </div>
+              <p className="mt-1 text-xl font-bold text-slate-900 dark:text-white">{nationalAnimalPosts.length}<span className="ml-1 text-xs font-normal text-slate-400">件</span></p>
+            </div>
+            <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700/70">
+              <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
+                <Database className="w-3.5 h-3.5" /> 端末内観測
+              </div>
+              <p className="mt-1 text-xl font-bold text-slate-900 dark:text-white">{localAnimalObservations.length}<span className="ml-1 text-xs font-normal text-slate-400">件</span></p>
+            </div>
+          </div>
+
+          {(animalTags.length > 0 || animalBehaviors.length > 0) && (
+            <div className="grid grid-cols-1 md:grid-cols-2 gap-3 text-xs">
+              <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2">
+                <p className="font-semibold text-slate-700 dark:text-slate-300">言及された生物</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {animalTags.map(item => (
+                    <span key={item.label} className="px-2 py-1 rounded-lg bg-emerald-50 dark:bg-emerald-950/40 text-emerald-700 dark:text-emerald-300">
+                      {item.label} {item.count}件
+                    </span>
+                  ))}
+                  {animalTags.length === 0 && <span className="text-slate-400">生物種の明記なし</span>}
+                </div>
+              </div>
+              <div className="p-3 rounded-xl border border-slate-200 dark:border-slate-700 space-y-2">
+                <p className="font-semibold text-slate-700 dark:text-slate-300">言及された行動</p>
+                <div className="flex flex-wrap gap-1.5">
+                  {animalBehaviors.map(item => (
+                    <span key={item.label} className="px-2 py-1 rounded-lg bg-indigo-50 dark:bg-indigo-950/40 text-indigo-700 dark:text-indigo-300">
+                      {item.label} {item.count}件
+                    </span>
+                  ))}
+                  {animalBehaviors.length === 0 && <span className="text-slate-400">具体的行動の明記なし</span>}
+                </div>
+              </div>
+            </div>
+          )}
+
+          <div className="flex flex-col md:flex-row md:items-center justify-between gap-3 p-3 rounded-xl bg-slate-50 dark:bg-slate-800/50 border border-slate-200 dark:border-slate-700">
+            <div className="text-xs text-slate-600 dark:text-slate-300 space-y-1">
+              <p className="font-semibold">動物投稿の平常時からの差: {summary.animalAnomalyScore === null ? '算出待ち' : `${summary.animalAnomalyScore} / 100`}</p>
+              <p className="text-[11px] text-slate-500">
+                {selectedWindow !== '6h'
+                  ? '平常時比較は保存条件が揃う「直近6h」表示で利用できます。'
+                  : summary.animalAnomalyScore === null
+                  ? `同じ時間帯の別日履歴を蓄積中（${summary.animalBaselineSampleCount}/7日）`
+                  : `別日${summary.animalBaselineSampleCount}日と比較（中央値 ${summary.animalBaselineMedian}件 / MAD ${summary.animalBaselineMad}件）`}
+              </p>
+            </div>
+            {(regionalAnimalPosts.length > 0 || nationalAnimalPosts.length > 0) && (
+              <button
+                type="button"
+                onClick={() => {
+                  setSelectedCategory('animal');
+                  setSelectedSource('all');
+                  setRecordView(regionalAnimalPosts.length > 0 ? 'regional' : 'national');
+                  requestAnimationFrame(() => document.getElementById('structured-social-records')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+                }}
+                className="shrink-0 px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold transition-colors"
+              >
+                該当する実在投稿を確認
+              </button>
+            )}
+          </div>
+        </div>
+
+        <div className="px-5 py-3 bg-amber-50 dark:bg-amber-950/30 border-t border-amber-200 dark:border-amber-900 flex items-start gap-2 text-[11px] text-amber-900 dark:text-amber-200">
+          <ShieldAlert className="w-4 h-4 shrink-0 mt-0.5" />
+          <p>
+            <strong>この値は地震の発生確率や予知ではありません。</strong>
+            天候、雷、花火、工事音、繁殖期、報道などでも行動言及は増えます。表示が増加しても避難を促す警報には使わず、日常の備えを確認する参考情報としてください。
+          </p>
+        </div>
+      </section>
+
       {/* カテゴリ別内訳チャート & データソース内訳 */}
       <div className="grid grid-cols-1 lg:grid-cols-2 gap-6">
         {/* 現象カテゴリ内訳 */}
@@ -472,7 +673,7 @@ export const SocialObservationView: React.FC<Props> = ({
       </div>
 
       {/* 投稿例と元リンク確認 (7.5節 / 16.14節) */}
-      <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
+      <div id="structured-social-records" className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4 scroll-mt-24">
         <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3">
           <div>
             <h3 className="font-bold text-slate-900 dark:text-white text-sm flex items-center gap-2">
