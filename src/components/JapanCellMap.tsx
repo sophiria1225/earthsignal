@@ -28,21 +28,21 @@ export const JapanCellMap: React.FC<Props> = ({
   const getCellColor = (cell: GeoCell) => {
     const score = cell.currentScore;
 
-    if (score.status === 'insufficient' || score.overallScore === null) {
+    let targetVal: number | null = score.overallScore;
+    if (activeLayer === 'social') targetVal = score.socialScore;
+    if (activeLayer === 'weather') targetVal = score.weatherScore;
+    if (activeLayer === 'audio') targetVal = score.animalAudioScore;
+    if (activeLayer === 'reports') targetVal = score.citizenReportScore;
+    if (activeLayer === 'earthquakes') targetVal = score.earthquakeActivityScore;
+
+    if (targetVal === null || (activeLayer === 'overall' && score.status === 'insufficient')) {
       return {
-        fill: '#94a3b8', // slate-400
+        fill: '#94a3b8',
         stroke: '#64748b',
         text: 'データ不足',
         value: '―',
       };
     }
-
-    let targetVal = score.overallScore;
-    if (activeLayer === 'social') targetVal = score.socialScore ?? 0;
-    if (activeLayer === 'weather') targetVal = score.weatherScore ?? 0;
-    if (activeLayer === 'audio') targetVal = score.animalAudioScore ?? 0;
-    if (activeLayer === 'reports') targetVal = score.citizenReportScore ?? 0;
-    if (activeLayer === 'earthquakes') targetVal = score.earthquakeActivityScore ?? 0;
 
     if (targetVal < 30) {
       return { fill: '#3b82f6', stroke: '#1d4ed8', text: '通常範囲', value: targetVal.toFixed(0) }; // blue
@@ -143,7 +143,7 @@ export const JapanCellMap: React.FC<Props> = ({
           {/* マップ凡例 & 注意 */}
           <div className="absolute top-4 left-4 z-10 bg-slate-900/90 backdrop-blur-md p-3 rounded-xl border border-slate-800 text-xs text-white space-y-2 max-w-xs pointer-events-none">
             <span className="font-semibold block text-[11px] text-slate-300">
-              表示レイヤー: {activeLayer === 'overall' ? '総合観測異常度' : activeLayer === 'weather' ? '雲・気象異常度' : activeLayer === 'audio' ? '動物音響異常度' : activeLayer === 'reports' ? '市民レポート異常度' : '地震活動度'}
+              表示レイヤー: {{ overall: '総合観測異常度', social: 'SNS集合知', weather: '雲・気象異常度', audio: '動物音響異常度', reports: '市民レポート異常度', earthquakes: '地震活動度' }[activeLayer]}
             </span>
             <div className="grid grid-cols-2 gap-x-2 gap-y-1 text-[10px]">
               <div className="flex items-center gap-1.5">
@@ -320,7 +320,7 @@ export const JapanCellMap: React.FC<Props> = ({
 
           {/* 下部情報バー */}
           <div className="flex items-center justify-between text-[11px] text-slate-400 bg-slate-950/60 p-2.5 rounded-xl border border-slate-800">
-            <span>● 震源地マーカー: P2P地震情報取得済み ({recentEarthquakes.length}件)</span>
+            <span>● 震源地マーカー: P2P地震情報 ({recentEarthquakes.length}件)</span>
             <span>⬡ 六角形セル: 観測メッシュ ({cells.length}箇所)</span>
           </div>
         </div>
@@ -353,7 +353,7 @@ export const JapanCellMap: React.FC<Props> = ({
             {/* 主要な平常時からの変化要因 (Contributors) */}
             <div className="space-y-2 pt-2 border-t border-slate-200 dark:border-slate-700">
               <span className="text-xs font-semibold text-slate-700 dark:text-slate-300 block">
-                統計的差異の主な要因 (vs 30日中央値)
+                統計的差異の主な要因（各指標の実測ベースライン比）
               </span>
 
               {selectedCell.currentScore.contributors.length > 0 ? (
@@ -374,7 +374,7 @@ export const JapanCellMap: React.FC<Props> = ({
                 </div>
               ) : (
                 <div className="p-3 bg-slate-50 dark:bg-slate-900 text-center text-xs text-slate-500 rounded-xl">
-                  特異な統計的乖離は検出されていません（平常範囲内）。
+                  {selectedCell.currentScore.status === 'insufficient' ? '比較できる履歴が不足しています。' : '大きな統計的乖離は検出されていません。'}
                 </div>
               )}
             </div>

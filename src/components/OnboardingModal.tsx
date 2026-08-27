@@ -47,7 +47,7 @@ export const OnboardingModal: React.FC<Props> = ({ isOpen, onClose }) => {
             </div>
             <div className="flex items-start gap-2.5">
               <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />
-              <span><strong>平常時からの観測異常度:</strong> 気象・音響・SNS集合知が過去30日の通常値とどれだけ異なるかをロバスト統計（MAD）で客観可視化</span>
+              <span><strong>平常時からの観測異常度:</strong> 利用可能な実測履歴が十分な項目だけをロバスト統計（MAD）で比較し、履歴不足は採点しません</span>
             </div>
             <div className="flex items-start gap-2.5">
               <CheckCircle className="w-4 h-4 text-emerald-500 shrink-0 mt-0.5" />

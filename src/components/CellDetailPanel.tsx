@@ -5,7 +5,6 @@ import {
   MapPin, 
   ShieldCheck, 
   HelpCircle, 
-  TrendingUp, 
   Cloud, 
   Volume2, 
   Gauge, 
@@ -14,16 +13,6 @@ import {
   Sparkles,
   RefreshCw
 } from 'lucide-react';
-import { 
-  ResponsiveContainer, 
-  LineChart, 
-  Line, 
-  XAxis, 
-  YAxis, 
-  Tooltip, 
-  CartesianGrid, 
-  Legend 
-} from 'recharts';
 
 interface Props {
   cell: GeoCell | null;
@@ -32,33 +21,12 @@ interface Props {
 }
 
 export const CellDetailPanel: React.FC<Props> = ({ cell, onClose, onOpenRecord }) => {
-  const [timeRange, setTimeRange] = useState<'24h' | '7d' | '30d'>('24h');
   const [aiExplanation, setAiExplanation] = useState<string | null>(null);
   const [isLoadingAi, setIsLoadingAi] = useState(false);
 
   if (!cell) return null;
 
   const score = cell.currentScore;
-
-  // 時系列シミュレーションデータ (24時間 / 7日)
-  const timeseriesData = Array.from({ length: 12 }).map((_, i) => {
-    const hour = (i * 2 + 2) % 24;
-    const baseAudio = score.animalAudioScore || 40;
-    const baseWeather = score.weatherScore || 45;
-    const baseSocial = score.socialScore || 50;
-    const baseOverall = score.overallScore || 42;
-    
-    // 時間帯による変動
-    const noise = Math.sin(i * 0.8) * 8;
-    return {
-      time: `${hour}:00`,
-      overall: Math.max(10, Math.min(95, Math.round(baseOverall + noise))),
-      audio: Math.max(10, Math.min(95, Math.round(baseAudio + noise * 1.4))),
-      weather: Math.max(10, Math.min(95, Math.round(baseWeather - noise * 0.8))),
-      social: Math.max(10, Math.min(95, Math.round(baseSocial + noise * 1.1))),
-      baselineMedian: 35,
-    };
-  });
 
   // Gemini API またはサーバエンドポイントによる自然言語解説リクエスト
   const fetchAiExplanation = async () => {
@@ -132,7 +100,7 @@ export const CellDetailPanel: React.FC<Props> = ({ cell, onClose, onOpenRecord }
                 <span className="text-xs text-slate-500">/ 100</span>
               </div>
               <span className="text-[11px] text-slate-500 mt-1 block">
-                ロバストZスコア換算式 (k=3.0) 準拠
+                ロバストZスコア＋ロジスティック変換
               </span>
             </div>
 
@@ -160,33 +128,14 @@ export const CellDetailPanel: React.FC<Props> = ({ cell, onClose, onOpenRecord }
             </div>
           </div>
 
-          {/* 時系列推移チャート (Recharts) */}
+          {/* 時系列履歴 */}
           <div className="bg-white dark:bg-slate-900/40 p-4 rounded-xl border border-slate-200 dark:border-slate-800 space-y-3">
-            <div className="flex items-center justify-between">
-              <h4 className="font-bold text-sm text-slate-900 dark:text-white flex items-center gap-2">
-                <TrendingUp className="w-4 h-4 text-indigo-500" />
-                観測異常度の時系列推移 (過去24時間)
-              </h4>
-              <span className="text-xs text-slate-500">中央値ベースライン比</span>
-            </div>
-
-            <div className="h-56 w-full">
-              <ResponsiveContainer width="100%" height="100%">
-                <LineChart data={timeseriesData}>
-                  <CartesianGrid strokeDasharray="3 3" stroke="#334155" opacity={0.3} />
-                  <XAxis dataKey="time" stroke="#94a3b8" fontSize={11} />
-                  <YAxis domain={[0, 100]} stroke="#94a3b8" fontSize={11} />
-                  <Tooltip 
-                    contentStyle={{ backgroundColor: '#0f172a', borderColor: '#334155', borderRadius: '8px', color: '#fff', fontSize: '12px' }} 
-                  />
-                  <Legend wrapperStyle={{ fontSize: '11px', paddingTop: '8px' }} />
-                  <Line type="monotone" dataKey="overall" name="総合観測異常度" stroke="#6366f1" strokeWidth={2.5} dot={{ r: 3 }} />
-                  <Line type="monotone" dataKey="social" name="SNS集合知" stroke="#8b5cf6" strokeWidth={1.5} dot={false} />
-                  <Line type="monotone" dataKey="audio" name="動物音響" stroke="#f59e0b" strokeWidth={1.5} strokeDasharray="4 4" dot={false} />
-                  <Line type="monotone" dataKey="weather" name="雲・気象" stroke="#06b6d4" strokeWidth={1.5} dot={false} />
-                  <Line type="monotone" dataKey="baselineMedian" name="平常中央値基準 (35)" stroke="#64748b" strokeWidth={1} strokeDasharray="2 2" dot={false} />
-                </LineChart>
-              </ResponsiveContainer>
+            <div className="flex items-start gap-2 text-xs text-slate-500">
+              <AlertTriangle className="w-4 h-4 text-amber-500 shrink-0 mt-0.5" />
+              <div>
+                <h4 className="font-bold text-sm text-slate-900 dark:text-white">異常度の時系列は蓄積中です</h4>
+                <p className="mt-1">固定のシミュレーション線は表示しません。定期スナップショットの永続保存が整い、実測点が複数そろった後に推移グラフを表示します。</p>
+              </div>
             </div>
           </div>
 
@@ -199,7 +148,7 @@ export const CellDetailPanel: React.FC<Props> = ({ cell, onClose, onOpenRecord }
                   SNS公開集合知 観測サマリー ({cell.socialSummary.window})
                 </h4>
                 <span className="text-xs text-indigo-600 dark:text-indigo-400 font-semibold">
-                  異常度 {cell.socialSummary.anomalyScore}/100 (品質: {cell.socialSummary.qualityScore})
+                  異常度 {cell.socialSummary.anomalyScore ?? '蓄積中'} {cell.socialSummary.anomalyScore !== null && '/100'} (品質: {cell.socialSummary.qualityScore})
                 </span>
               </div>
               <div className="grid grid-cols-2 sm:grid-cols-4 gap-2 text-xs">
@@ -221,7 +170,7 @@ export const CellDetailPanel: React.FC<Props> = ({ cell, onClose, onOpenRecord }
                 </div>
               </div>
               <div className="flex flex-wrap items-center justify-between gap-2 pt-1 border-t border-slate-200/40 dark:border-slate-800 text-[11px] text-slate-500">
-                <p>※Bluesky / Mastodon / YouTube 公開エンドポイントより集計</p>
+                <p>※Bluesky / Mastodon 公開エンドポイントより集計</p>
                 <div className="flex items-center gap-2">
                   <a
                     href={`https://bsky.app/search?q=${encodeURIComponent(`${cell.name} 地震雲 OR 地鳴り`)}`}
@@ -292,7 +241,7 @@ export const CellDetailPanel: React.FC<Props> = ({ cell, onClose, onOpenRecord }
           <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs text-amber-900 dark:text-amber-200 flex items-start gap-2">
             <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
             <span>
-              本スコアは過去の同一地域・同一時間帯との「統計的乖離度」を示す指標です。地震の発生を予測・保証するものではありません。
+              本スコアは取得できた実測履歴との「統計的乖離度」です。履歴不足の項目は採点せず、地震の発生を予測・保証するものではありません。
             </span>
           </div>
         </div>

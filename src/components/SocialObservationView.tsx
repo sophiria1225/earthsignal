@@ -32,6 +32,7 @@ interface Props {
   allCells: GeoCell[];
   onSelectCell: (cell: GeoCell) => void;
   posts?: SocialDerivedPost[];
+  onPostsChange?: (posts: SocialDerivedPost[]) => void;
 }
 
 export const SocialObservationView: React.FC<Props> = ({
@@ -39,6 +40,7 @@ export const SocialObservationView: React.FC<Props> = ({
   allCells,
   onSelectCell,
   posts: initialPosts = [],
+  onPostsChange,
 }) => {
   const [selectedWindow, setSelectedWindow] = useState<'1h' | '6h' | '24h'>('6h');
   const [selectedCategory, setSelectedCategory] = useState<SocialCategory | 'all'>('all');
@@ -49,13 +51,17 @@ export const SocialObservationView: React.FC<Props> = ({
   const [sourceStatuses, setSourceStatuses] = useState<SocialFetchSourceStatus[]>([]);
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
 
-  // 初期マウント時の自動取得と、定期的な自動更新（1分毎）
+  useEffect(() => {
+    setPostsList(initialPosts);
+  }, [initialPosts]);
+
+  // 初期マウント時の自動取得と、サーバーキャッシュ周期に合わせた定期更新（5分毎）
   useEffect(() => {
     handleFetchLivePosts(true);
 
     const intervalId = setInterval(() => {
       handleFetchLivePosts(false);
-    }, 60000);
+    }, 5 * 60_000);
 
     return () => clearInterval(intervalId);
   }, []);
@@ -68,6 +74,7 @@ export const SocialObservationView: React.FC<Props> = ({
     try {
       const result = await fetchLiveSocialPosts();
       setPostsList(result.posts);
+      onPostsChange?.(result.posts);
       setSourceStatuses(result.sources);
 
       if (!isInitial) {
@@ -131,8 +138,8 @@ export const SocialObservationView: React.FC<Props> = ({
         <div className="text-xs text-amber-900 dark:text-amber-200 space-y-1">
           <p className="font-semibold text-sm">SNS集合知レイヤーの観測方針（要件定義書 v2.0 第7章・第16章）</p>
           <p>
-            Bluesky / Mastodon / YouTube 等の公開エンドポイントから、言及された「現象の種類・時刻・粗い地域」を集計しています。
-            <strong className="underline decoration-amber-500">SNS投稿の増加は地震の前兆を意味しません。</strong> テレビ報道や天候（夕焼け・雷雨）による全国的な話題急増（Global Topic Spike）や重複・比喩投稿は自動除外・品質スコア補正されています。
+            Bluesky / Mastodon の公開エンドポイントから、言及された「現象の種類・時刻・粗い地域」を集計しています。YouTubeは自動収集せず、検索リンクだけを提供します。
+            <strong className="underline decoration-amber-500">SNS投稿の増加は地震の前兆を意味しません。</strong> 重複、否定文、過去談、公式発表への反応はルールで区別します。全国的な話題急増の自動補正とSNS異常度は、長期履歴が整うまで採点しません。
           </p>
         </div>
       </div>
@@ -316,10 +323,12 @@ export const SocialObservationView: React.FC<Props> = ({
         <div className="bg-white dark:bg-slate-900 p-4 rounded-2xl border border-slate-200 dark:border-slate-800 shadow-sm">
           <span className="text-xs text-slate-500 font-medium">SNS観測異常度</span>
           <div className="flex items-baseline gap-2 mt-1">
-            <span className="text-2xl font-bold text-indigo-600 dark:text-indigo-400">{summary.anomalyScore}</span>
+            <span className="text-2xl font-bold text-indigo-600 dark:text-indigo-400">{summary.anomalyScore ?? '―'}</span>
             <span className="text-xs text-slate-400">/ 100</span>
           </div>
-          <p className="text-[11px] text-slate-400 mt-1">平常同時間帯中央値からのずれ</p>
+          <p className="text-[11px] text-slate-400 mt-1">
+            {summary.anomalyScore === null ? '地域別履歴を蓄積中' : '平常同時間帯中央値からのずれ'}
+          </p>
         </div>
       </div>
 
@@ -378,12 +387,11 @@ export const SocialObservationView: React.FC<Props> = ({
             </div>
 
             <div className="bg-slate-50 dark:bg-slate-800/60 p-3 rounded-xl border border-slate-200/60 dark:border-slate-700/60 space-y-1.5">
-              <span className="font-semibold text-slate-500">分類方式 (AI二段構成)</span>
+              <span className="font-semibold text-slate-500">現在の分類方式</span>
               <div className="space-y-1 text-slate-700 dark:text-slate-300">
                 <div className="flex justify-between"><span>辞書・正規表現:</span><span className="font-bold">{summary.analysisModes.rules}件</span></div>
-                <div className="flex justify-between"><span>埋め込み類似度:</span><span className="font-bold">{summary.analysisModes.embedding}件</span></div>
-                <div className="flex justify-between"><span>Workers AI (LLM):</span><span className="font-bold">{summary.analysisModes.llm}件</span></div>
-                <div className="flex justify-between"><span>無料枠超過退避:</span><span className="font-bold">{summary.analysisModes.rules_only_quota}件</span></div>
+                <div className="flex justify-between"><span>AI分類:</span><span className="font-bold">未使用</span></div>
+                <p className="text-[10px] text-slate-400 pt-1">分類理由を再現できるルール方式のみを使用中</p>
               </div>
             </div>
           </div>

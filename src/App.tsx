@@ -4,10 +4,11 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { GeoCell, Earthquake, Observation } from './types';
-import { INITIAL_GEO_CELLS, INITIAL_EARTHQUAKES, INITIAL_OBSERVATIONS } from './services/dataStore';
+import { GeoCell, Earthquake, Observation, SocialDerivedPost } from './types';
+import { createRuntimeGeoCells } from './services/dataStore';
 import { fetchP2PEarthquakes, fetchOpenMeteoWeather } from './services/externalFeeds';
 import { calculateRobustAnomalyScore } from './services/anomalyEngine';
+import { fetchLiveSocialPosts, generateCellSocialSummary } from './services/snsCollector';
 import { Header, TabType } from './components/Header';
 import { HomeDashboard } from './components/HomeDashboard';
 import { JapanCellMap } from './components/JapanCellMap';
@@ -16,19 +17,34 @@ import { AudioRecorderModal } from './components/AudioRecorderModal';
 import { CloudPhotoModal } from './components/CloudPhotoModal';
 import { CitizenReportModal } from './components/CitizenReportModal';
 import { EarthquakeDetailModal } from './components/EarthquakeDetailModal';
-import { PostEventVerificationView } from './components/PostEventVerificationView';
 import { ResearchInfoView } from './components/ResearchInfoView';
 import { SocialObservationView } from './components/SocialObservationView';
 import { FreeTierStatusView } from './components/FreeTierStatusView';
 import { OnboardingModal } from './components/OnboardingModal';
 
+const PostEventVerificationView = React.lazy(() =>
+  import('./components/PostEventVerificationView').then(module => ({
+    default: module.PostEventVerificationView,
+  }))
+);
+
 export default function App() {
+  const initialCells = React.useMemo(() => createRuntimeGeoCells(), []);
   const [activeTab, setActiveTab] = useState<TabType>('home');
-  const [cells, setCells] = useState<GeoCell[]>(INITIAL_GEO_CELLS);
-  const [selectedCell, setSelectedCell] = useState<GeoCell>(INITIAL_GEO_CELLS[0]);
-  const [earthquakes, setEarthquakes] = useState<Earthquake[]>(INITIAL_EARTHQUAKES);
-  const [observations, setObservations] = useState<Observation[]>(INITIAL_OBSERVATIONS);
+  const [cells, setCells] = useState<GeoCell[]>(initialCells);
+  const [selectedCell, setSelectedCell] = useState<GeoCell>(initialCells[0]);
+  const [earthquakes, setEarthquakes] = useState<Earthquake[]>([]);
+  const [socialPosts, setSocialPosts] = useState<SocialDerivedPost[]>([]);
+  const [observations, setObservations] = useState<Observation[]>(() => {
+    try {
+      const stored = JSON.parse(localStorage.getItem('earthsignal_observations_v1') || '[]');
+      return Array.isArray(stored) ? stored.slice(0, 200) : [];
+    } catch {
+      return [];
+    }
+  });
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+  const [liveSources, setLiveSources] = useState({ earthquake: false, weather: false, social: false });
   const [showOnboarding, setShowOnboarding] = useState<boolean>(false);
 
   // モーダル管理
@@ -49,38 +65,62 @@ export default function App() {
     setShowOnboarding(false);
   };
 
+  useEffect(() => {
+    localStorage.setItem('earthsignal_observations_v1', JSON.stringify(observations.slice(0, 200)));
+  }, [observations]);
+
+  // セル配列更新後も、選択中セルが古いオブジェクトを参照しないよう同期する。
+  useEffect(() => {
+    const latest = cells.find(cell => cell.id === selectedCell.id);
+    if (latest && latest !== selectedCell) setSelectedCell(latest);
+  }, [cells, selectedCell.id]);
+
   // データ更新関数
   const refreshData = async () => {
     setIsRefreshing(true);
     try {
-      // 1. 地震情報
-      const p2pRes = await fetchP2PEarthquakes();
-      if (p2pRes.earthquakes && p2pRes.earthquakes.length > 0) {
-        setEarthquakes(p2pRes.earthquakes);
-      }
+      const earthquakePromise = fetchP2PEarthquakes()
+        .catch(() => ({ earthquakes: [], isLive: false, fetchedAt: new Date().toISOString() }));
+      const socialPromise = fetchLiveSocialPosts()
+        .catch(() => ({ posts: [], isLive: false, fetchedAt: new Date().toISOString(), sources: [] }));
+      const weatherPromise = Promise.all(cells.map(cell => fetchOpenMeteoWeather(cell.id).catch(() => ({
+        weather: null,
+        isLive: false,
+        fetchedAt: new Date().toISOString(),
+      }))));
+      const [earthquakeResult, socialResult, weatherResults] = await Promise.all([
+        earthquakePromise,
+        socialPromise,
+        weatherPromise,
+      ]);
 
-      // 2. 選択セルのリアルタイム気象
-      const weather = await fetchOpenMeteoWeather(
-        selectedCell.id,
-        selectedCell.center.latitude,
-        selectedCell.center.longitude
-      );
-      if (weather) {
-        setCells((prev) =>
-          prev.map((c) => {
-            if (c.id === selectedCell.id) {
-              const updated = { ...c, weather };
-              const updatedScore = calculateRobustAnomalyScore(
-                updated,
-                observations.filter((o) => o.cellId === c.id),
-                earthquakes
-              );
-              return { ...updated, currentScore: updatedScore };
-            }
-            return c;
-          })
+      const freshEarthquakes = earthquakeResult.earthquakes;
+      const freshSocialPosts = socialResult.posts;
+      setEarthquakes(freshEarthquakes);
+      setSocialPosts(freshSocialPosts);
+      setLiveSources({
+        earthquake: earthquakeResult.isLive,
+        weather: weatherResults.some(result => result.isLive),
+        social: socialResult.isLive,
+      });
+
+      setCells(prev => prev.map((cell, index) => {
+        const weatherResult = weatherResults[index];
+        const weather = weatherResult?.weather || { ...cell.weather, isStale: true };
+        const socialSummary = generateCellSocialSummary(cell.id, freshSocialPosts, '6h');
+        const updated = { ...cell, weather, socialSummary };
+        const currentScore = calculateRobustAnomalyScore(
+          updated,
+          observations.filter(observation => observation.cellId === cell.id),
+          freshEarthquakes,
+          socialSummary.anomalyScore
         );
-      }
+        return {
+          ...updated,
+          recentObservationsCount: observations.filter(observation => observation.cellId === cell.id).length,
+          currentScore,
+        };
+      }));
     } finally {
       setIsRefreshing(false);
     }
@@ -106,7 +146,7 @@ export default function App() {
       prev.map((c) => {
         if (c.id === newObs.cellId) {
           const cellObs = nextObs.filter((o) => o.cellId === c.id);
-          const newScore = calculateRobustAnomalyScore(c, cellObs, earthquakes);
+          const newScore = calculateRobustAnomalyScore(c, cellObs, earthquakes, c.socialSummary?.anomalyScore);
           const updatedCell = { ...c, currentScore: newScore };
           if (selectedCell.id === c.id) {
             setSelectedCell(updatedCell);
@@ -125,7 +165,7 @@ export default function App() {
       <Header
         activeTab={activeTab}
         onSelectTab={setActiveTab}
-        isLiveFeed={true}
+        isLiveFeed={liveSources.earthquake && liveSources.weather}
         isRefreshing={isRefreshing}
         onRefresh={refreshData}
         onOpenPrivacy={() => setShowOnboarding(true)}
@@ -134,6 +174,11 @@ export default function App() {
 
       {/* メインコンテンツエリア */}
       <main className="flex-1 pb-16">
+        <React.Suspense fallback={(
+          <div className="max-w-7xl mx-auto px-4 py-12 text-center text-sm text-slate-500">
+            画面を読み込んでいます…
+          </div>
+        )}>
         {activeTab === 'home' && (
           <HomeDashboard
             selectedCell={selectedCell}
@@ -171,6 +216,24 @@ export default function App() {
               selectedCell={selectedCell}
               allCells={cells}
               onSelectCell={handleSelectCell}
+              posts={socialPosts}
+              onPostsChange={(posts) => {
+                setSocialPosts(posts);
+                setLiveSources(current => ({ ...current, social: true }));
+                setCells(prev => prev.map(cell => {
+                  const socialSummary = generateCellSocialSummary(cell.id, posts, '6h');
+                  return {
+                    ...cell,
+                    socialSummary,
+                    currentScore: calculateRobustAnomalyScore(
+                      { ...cell, socialSummary },
+                      observations.filter(observation => observation.cellId === cell.id),
+                      earthquakes,
+                      socialSummary.anomalyScore
+                    ),
+                  };
+                }));
+              }}
             />
           </div>
         )}
@@ -196,7 +259,7 @@ export default function App() {
                 </div>
                 <h3 className="font-bold text-base text-slate-900 dark:text-white">10秒音響録音</h3>
                 <p className="text-xs text-slate-500">
-                  YAMNet AIで鳥・犬の鳴き声・風速ノイズを自動分類。生音声は解析直後に自動破棄されます。
+                  音量・無音率などを端末内解析し、聞こえた動物音・環境音は利用者が確認。生音声は解析直後に破棄されます。
                 </p>
                 <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 block pt-2">
                   マイクで録音を開始 →
@@ -212,7 +275,7 @@ export default function App() {
                 </div>
                 <h3 className="font-bold text-base text-slate-900 dark:text-white">雲写真の撮影・解析</h3>
                 <p className="text-xs text-slate-500">
-                  EXIF位置情報を自動除去。空占有率と気象学的雲形（波状雲・すじ雲等）を解析。
+                  元写真・EXIFは保存せず端末内で空占有率を推定。雲形は利用者が選択します。
                 </p>
                 <span className="text-xs font-bold text-cyan-600 dark:text-cyan-400 block pt-2">
                   写真を投稿する →
@@ -247,6 +310,7 @@ export default function App() {
         )}
 
         {activeTab === 'research' && <ResearchInfoView />}
+        </React.Suspense>
       </main>
 
       {/* フッター */}
@@ -256,11 +320,11 @@ export default function App() {
           <button onClick={() => setActiveTab('map')} className="hover:underline">全国観測マップ</button>
           <button onClick={() => setActiveTab('social')} className="hover:underline">SNS集合知</button>
           <button onClick={() => setActiveTab('evaluation')} className="hover:underline">事後検証</button>
-          <button onClick={() => setActiveTab('status')} className="hover:underline">無料枠・キルスイッチ</button>
+          <button onClick={() => setActiveTab('status')} className="hover:underline">データソース接続状態</button>
           <button onClick={() => setActiveTab('research')} className="hover:underline">科学的根拠・仕様</button>
         </div>
         <p>
-          EarthSignal: 地震前兆候補の客観的観測・事後検証オープンプラットフォーム (気象庁P2P・Open-Meteo・Bluesky・Mastodon準拠)
+          EarthSignal: 地震関連情報と身の回りの変化を統合し、平常時との差を確認する観測プラットフォーム
         </p>
         <p className="text-[11px] text-slate-400">
           ※本システムは地震予知を行うものではありません。緊急時は気象庁の緊急地震速報および自治体の避難指示に従ってください。
@@ -318,4 +382,3 @@ export default function App() {
     </div>
   );
 }
-

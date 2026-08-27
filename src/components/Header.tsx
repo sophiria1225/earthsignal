@@ -41,7 +41,7 @@ export const Header: React.FC<Props> = ({
                 </span>
               </div>
               <p className="text-[11px] text-slate-500 dark:text-slate-400 hidden sm:block">
-                地震前兆候補の観測・検証プラットフォーム
+                地震関連情報と身の回りの変化を統合観測
               </p>
             </div>
           </div>
@@ -118,7 +118,7 @@ export const Header: React.FC<Props> = ({
               }`}
             >
               <Sliders className="w-4 h-4" />
-              無料枠・状態
+              接続状態
             </button>
             <button
               id="nav-tab-research"
@@ -231,7 +231,7 @@ export const Header: React.FC<Props> = ({
           }`}
         >
           <Sliders className="w-4 h-4" />
-          <span>無料枠</span>
+          <span>接続</span>
         </button>
         <button
           onClick={() => onSelectTab('research')}

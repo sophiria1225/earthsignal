@@ -54,21 +54,21 @@ export const PostEventVerificationView: React.FC = () => {
             </div>
             <div>
               <h2 className="font-bold text-slate-900 dark:text-white text-lg">
-                事後検証 (Case-Control Analysis) カタログ
+                事後検証の設計サンプル
               </h2>
               <span className="text-xs text-slate-500">
-                第24章・第25章 研究評価設計 準拠
+                実データセット公開前のUI・分析手順デモ
               </span>
             </div>
           </div>
 
           <span className="text-xs bg-purple-50 dark:bg-purple-950/40 text-purple-700 dark:text-purple-300 px-3 py-1 rounded-full border border-purple-200 dark:border-purple-800 font-semibold">
-            対照群比較 & リーケージ防止プロトコル
+            サンプルデータ（研究結果ではありません）
           </span>
         </div>
 
         <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed max-w-4xl">
-          地震発生後にSNS等で語られる「前兆証言」の多くは、地震後の心理的想起バイアスや気象交絡によるものです。EarthSignalでは、地震前24h〜72hの観測データと、地震が起きなかった同曜日・同時間帯の「対照期間」を厳格に比較検証しています。
+          以下の数値・信頼区間・結論は、事後検証画面と分析手順を説明するための仮想サンプルです。実測データによる研究結果ではありません。本番では、地震前24h〜72hと地震が起きなかった同曜日・同時間帯を比較する設計を採用します。
         </p>
       </div>
 
@@ -101,7 +101,7 @@ export const PostEventVerificationView: React.FC = () => {
                         ? 'bg-amber-100 dark:bg-amber-950 text-amber-800 dark:text-amber-300'
                         : 'bg-indigo-100 dark:bg-indigo-950 text-indigo-800 dark:text-indigo-300'
                     }`}>
-                      {isFalsePositive ? '偽陽性検証サンプル' : '実地震ケース'}
+                      {isFalsePositive ? '仮想の偽陽性例' : '実地震を題材にした設計例'}
                     </span>
                     <span className="text-[11px] text-slate-400">
                       窓: 発生前{ev.analysisWindow}
@@ -177,7 +177,7 @@ export const PostEventVerificationView: React.FC = () => {
             {/* 各指標の統計詳細テーブル */}
             <div className="space-y-2">
               <span className="text-xs font-bold text-slate-800 dark:text-slate-200 block">
-                統計検定データ一覧 (多重比較補正済み)
+                統計検定の想定出力（設計サンプル）
               </span>
 
               <div className="overflow-x-auto">
@@ -240,7 +240,7 @@ export const PostEventVerificationView: React.FC = () => {
             <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs text-amber-900 dark:text-amber-200 flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
               <span>
-                <strong>科学的健全性の担保:</strong> EarthSignalでは、高い異常度が出たが地震が発生しなかった「偽陽性事例」も欠落なくアーカイブし、多重比較による偶然の相関を排除する透明な研究姿勢を徹底しています。
+                <strong>表示上の注意:</strong> このページは分析設計のデモです。実測履歴の永続保存、対照群の事前登録、多重比較補正が実装・監査されるまで、研究結果として解釈できません。
               </span>
             </div>
           </div>

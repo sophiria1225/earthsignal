@@ -1,7 +1,7 @@
 /**
- * EarthSignal - Audio AI & Audio Processing Pipeline
+ * EarthSignal - Audio Signal Processing Pipeline
  * Implements Section 13 of Requirements Document v1.0
- * Browser Web Audio API recording + YAMNet classification simulation + Privacy protection
+ * Browser Web Audio API recording + signal-quality heuristics + privacy protection
  */
 
 import { AudioAnalysis, AudioLabel } from '../types';
@@ -86,83 +86,63 @@ export function analyzeAudioBuffer(audioBuffer: AudioBuffer): AudioQualityMetric
 }
 
 /**
- * YAMNet (521クラス) 音響分類シミュレーション
- * 音声特徴量と環境パラメータに基づき、上位ラベルを分類
+ * 端末内で算出できる信号品質指標を表示用ラベルへ変換する。
+ * 動物種や音源の分類モデルではないため、犬・鳥などは利用者確認として別途記録する。
  */
 export function classifyAudioFeatures(
   metrics: AudioQualityMetrics,
-  observationId: string,
-  environmentHint?: string
+  observationId: string
 ): AudioAnalysis {
   const topLabels: AudioLabel[] = [];
 
-  // 音声のRMSとZCR、品質に基づき自然界の音響シグネチャを分類
-  const isLoud = metrics.rmsDb > -24;
   const isSpeech = metrics.speechRatio > 0.15;
   const isSilent = metrics.silenceRatio > 0.5;
+
+  const levelScore = Math.max(0, Math.min(1, (metrics.rmsDb + 60) / 48));
+  topLabels.push({
+    label: 'Environmental sound level',
+    displayName: metrics.rmsDb > -24 ? '大きめの環境音' : '通常〜小さめの環境音',
+    meanScore: Math.round(levelScore * 100) / 100,
+    maxScore: Math.round(levelScore * 100) / 100,
+    frameRatio: 1 - metrics.silenceRatio,
+  });
 
   if (isSpeech) {
     topLabels.push({
       label: 'Speech / Conversation',
       displayName: '人の会話・発話 (Speech)',
-      meanScore: 0.58,
-      maxScore: 0.86,
+      meanScore: metrics.speechRatio,
+      maxScore: metrics.speechRatio,
       frameRatio: metrics.speechRatio,
     });
   }
 
-  // 犬の鳴き声 (周期的なパルス性高エネルギー音)
-  const dogScore = isLoud ? 0.65 : 0.38;
-  topLabels.push({
-    label: 'Dog / Bark',
-    displayName: '犬の鳴き声 (Bark / Howl)',
-    meanScore: dogScore,
-    maxScore: Math.min(0.96, dogScore + 0.28),
-    frameRatio: 0.42,
-  });
+  if (isSilent) {
+    topLabels.push({
+      label: 'Silence',
+      displayName: '無音区間が多い録音',
+      meanScore: metrics.silenceRatio,
+      maxScore: metrics.silenceRatio,
+      frameRatio: metrics.silenceRatio,
+    });
+  }
 
-  // 野鳥のさえずり
-  topLabels.push({
-    label: 'Bird vocalization',
-    displayName: '野鳥のさえずり (Bird Song)',
-    meanScore: 0.32,
-    maxScore: 0.64,
-    frameRatio: 0.25,
-  });
-
-  // カラス
-  topLabels.push({
-    label: 'Crow / Caw',
-    displayName: 'カラスの鳴き声 (Crow)',
-    meanScore: 0.24,
-    maxScore: 0.52,
-    frameRatio: 0.18,
-  });
-
-  // 風切り音
-  topLabels.push({
-    label: 'Wind',
-    displayName: '風切り音 (Wind Noise)',
-    meanScore: metrics.rmsDb < -30 ? 0.45 : 0.18,
-    maxScore: 0.55,
-    frameRatio: 0.30,
-  });
-
-  // 低周波環境音 (地鳴り様・車両・重低音)
-  topLabels.push({
-    label: 'Low Frequency Rumble / Vehicle',
-    displayName: '低周波環境音・車両振動',
-    meanScore: 0.19,
-    maxScore: 0.41,
-    frameRatio: 0.15,
-  });
+  if (metrics.clippingRatio > 0.01) {
+    topLabels.push({
+      label: 'Clipping',
+      displayName: '入力音量超過（クリッピング）',
+      meanScore: metrics.clippingRatio,
+      maxScore: metrics.clippingRatio,
+      frameRatio: metrics.clippingRatio,
+    });
+  }
 
   topLabels.sort((a, b) => b.meanScore - a.meanScore);
 
   return {
     id: `aud_an_${Date.now()}`,
     observationId,
-    modelVersion: 'yamnet-v1.0.2',
+    modelVersion: 'signal-quality-heuristic-v1',
     durationMs: metrics.durationMs,
     rmsDb: metrics.rmsDb,
     clippingRatio: metrics.clippingRatio,

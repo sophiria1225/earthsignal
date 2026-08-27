@@ -1,6 +1,6 @@
 /**
  * EarthSignal - SNS Collective Intelligence Layer (v2.0)
- * Integrates Bluesky, Mastodon, YouTube, and Misskey public endpoints
+ * Collects Bluesky and Mastodon public posts on the server, then derives privacy-preserving summaries.
  * Implements rule dictionary, negation/historical filtering, deduplication, geo-extraction, and quality scoring
  */
 
@@ -23,6 +23,15 @@ export const KEYWORD_DICTIONARY: Record<SocialCategory, string[]> = {
 const NEGATION_REGEX = /(ない|無い|なかった|ではない|違う|デマ|無関係|根拠.{0,5}(ない|無い)|迷信|嘘|勘違い|嘘っぽい)/i;
 const HISTORICAL_REGEX = /(昔|先日|数日前|この前|去年|昨年|\d+[日週ヶか月年]前|過去|思い出|東日本大震災の時|あの時)/i;
 const QUOTATION_REGEX = /(ニュース|記事|引用|リポスト|RT|転載|報道|まとめ)/i;
+
+function stableTextId(value: string): string {
+  let hash = 2166136261;
+  for (let index = 0; index < value.length; index += 1) {
+    hash ^= value.charCodeAt(index);
+    hash = Math.imul(hash, 16777619);
+  }
+  return (hash >>> 0).toString(36);
+}
 
 // 都道府県・主要都市の辞書
 const JAPAN_PREFECTURES = [
@@ -51,8 +60,6 @@ const MAJOR_CITIES_MAP: Record<string, { pref: string; cellId: string }> = {
   '大阪': { pref: '大阪府', cellId: 'cell_osaka_05' },
   '神戸': { pref: '兵庫県', cellId: 'cell_osaka_05' },
   '京都': { pref: '京都府', cellId: 'cell_osaka_05' },
-  '春日井': { pref: '愛知県', cellId: 'cell_tokyo_01' },
-  '名古屋': { pref: '愛知県', cellId: 'cell_tokyo_01' },
   '宮崎': { pref: '宮崎県', cellId: 'cell_miyazaki_06' },
   '日南': { pref: '宮崎県', cellId: 'cell_miyazaki_06' },
   '札幌': { pref: '北海道', cellId: 'cell_hokkaido_07' },
@@ -205,115 +212,29 @@ export function buildSocialSearchUrl(source: SocialSourceType, query: string): s
   }
 }
 
-// 模擬・初期リアルタイムSNSフィード（実在する検索URL・有効なリンクに設定）
-export const SAMPLE_SOCIAL_POSTS: SocialDerivedPost[] = [
-  {
-    id: 'bsky_post_001',
-    source: 'bluesky',
-    sourceIdHash: 'b94a8fe5ccb19ba61c4c0873d391e987982fbbd3',
-    sourceUrl: 'https://bsky.app/profile/bsky.app/post/3kwwxysqabc2z',
-    postedAt: new Date(Date.now() - 1000 * 60 * 25).toISOString(),
-    fetchedAt: new Date().toISOString(),
-    category: 'animal',
-    subject: '犬',
-    behavior: '夜間に連続して吠え続ける',
-    h3Cell: 'cell_tokyo_01',
-    placeName: '東京都渋谷区',
-    placeConfidence: 0.92,
-    informationQuality: 0.85,
-    isPostEventReaction: false,
-    isDuplicate: false,
-    analysisMode: 'rules',
-    temporaryExcerpt: 'さっきから近所の犬がずっと遠吠えしてる…渋谷区',
-  },
-  {
-    id: 'masto_post_002',
-    source: 'mastodon',
-    sourceIdHash: '4b227777d4dd1fc61c6f884f48641d02b4d121d3',
-    sourceUrl: 'https://mstdn.jp/@dummy_user/11293847291038291',
-    postedAt: new Date(Date.now() - 1000 * 60 * 40).toISOString(),
-    fetchedAt: new Date().toISOString(),
-    category: 'cloud',
-    subject: '高積雲',
-    behavior: '南西から北東へ伸びる放射状雲',
-    h3Cell: 'cell_chiba_02',
-    placeName: '千葉県銚子市',
-    placeConfidence: 0.88,
-    informationQuality: 0.78,
-    isPostEventReaction: false,
-    isDuplicate: false,
-    analysisMode: 'rules',
-    temporaryExcerpt: '銚子の空、南西から放射状に伸びる変な雲が広がってる #地震雲 #空',
-  },
-  {
-    id: 'yt_post_003',
-    source: 'youtube',
-    sourceIdHash: 'ef2d127de37b942baad06145e54b0c619a1f223b',
-    sourceUrl: 'https://www.youtube.com/watch?v=dQw4w9WgXcQ',
-    postedAt: new Date(Date.now() - 1000 * 60 * 75).toISOString(),
-    fetchedAt: new Date().toISOString(),
-    category: 'sound',
-    subject: '地鳴り',
-    behavior: '重低音の振動音',
-    h3Cell: 'cell_chiba_02',
-    placeName: '千葉県東部',
-    placeConfidence: 0.75,
-    informationQuality: 0.65,
-    isPostEventReaction: false,
-    isDuplicate: false,
-    analysisMode: 'rules',
-    temporaryExcerpt: '【観測記録】千葉県東部でゴーという低い地鳴りのような音が2分間継続',
-  },
-  {
-    id: 'bsky_post_004',
-    source: 'bluesky',
-    sourceIdHash: '1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d7e8f9a0b',
-    sourceUrl: 'https://bsky.app/profile/weather.bsky.social/post/3kwxyzabcdefg',
-    postedAt: new Date(Date.now() - 1000 * 60 * 10).toISOString(),
-    fetchedAt: new Date().toISOString(),
-    category: 'animal',
-    subject: '野鳥・カラス',
-    behavior: '夕方に一斉に旋回',
-    h3Cell: 'cell_noto_03',
-    placeName: '石川県能登',
-    placeConfidence: 0.85,
-    informationQuality: 0.72,
-    isPostEventReaction: false,
-    isDuplicate: false,
-    analysisMode: 'rules',
-    temporaryExcerpt: '能登の空、カラスがいつもと違う方向に大量に飛んでる',
-  },
-  {
-    id: 'masto_post_005',
-    source: 'mastodon',
-    sourceIdHash: '7c8d9e0f1a2b3c4d5e6f7a8b9c0d1e2f3a4b5c6d',
-    sourceUrl: 'https://mstdn.jp/@nature_obs/10987654321098765',
-    postedAt: new Date(Date.now() - 1000 * 60 * 180).toISOString(),
-    fetchedAt: new Date().toISOString(),
-    category: 'shaking',
-    subject: '微振動',
-    behavior: '微小な揺れ',
-    h3Cell: 'cell_miyazaki_06',
-    placeName: '宮崎市',
-    placeConfidence: 0.80,
-    informationQuality: 0.60,
-    isPostEventReaction: false,
-    isDuplicate: false,
-    analysisMode: 'rules',
-    temporaryExcerpt: '宮崎市内でかすかに揺れた気がする、気のせい？',
-  },
-];
-
 /**
- * Bluesky 公開検索 API (認証不要・CORS対応) からリアルタイム投稿を取得
+ * Bluesky 公開検索 API からリアルタイム投稿を取得
  */
 export async function fetchLiveBlueskyPosts(
   query: string = '地震雲 OR 地鳴り OR 犬 吠える',
-  options: { signal?: AbortSignal; throwOnError?: boolean } = {}
+  options: {
+    signal?: AbortSignal;
+    throwOnError?: boolean;
+    serviceUrl?: 'https://api.bsky.app' | 'https://bsky.social';
+    accessJwt?: string;
+  } = {}
 ): Promise<SocialDerivedPost[]> {
   try {
-    const url = `https://api.bsky.app/xrpc/app.bsky.feed.searchPosts?q=${encodeURIComponent(query)}&limit=20&sort=latest&lang=ja`;
-    const res = await fetch(url, { headers: { 'Accept': 'application/json' }, signal: options.signal });
+    const serviceUrl = options.serviceUrl || 'https://api.bsky.app';
+    const url = `${serviceUrl}/xrpc/app.bsky.feed.searchPosts?q=${encodeURIComponent(query)}&limit=100&sort=latest&lang=ja`;
+    const res = await fetch(url, {
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': 'EarthSignal/1.0 (public-earth-observation-research)',
+        ...(options.accessJwt ? { Authorization: `Bearer ${options.accessJwt}` } : {}),
+      },
+      signal: options.signal,
+    });
     if (!res.ok) {
       throw new Error(`Bluesky API returned ${res.status}`);
     }
@@ -342,9 +263,9 @@ export async function fetchLiveBlueskyPosts(
       });
 
       return {
-        id: `bsky_${p.cid || Math.random().toString(36).substring(2, 9)}`,
+        id: `bsky_${p.cid || stableTextId(`${p.uri || ''}:${p.record?.createdAt || ''}:${text}`)}`,
         source: 'bluesky',
-        sourceIdHash: p.cid || Math.random().toString(36),
+        sourceIdHash: p.cid || stableTextId(`${p.uri || ''}:${p.record?.createdAt || ''}:${text}`),
         actorIdHash: p.author?.did,
         sourceUrl: webUrl,
         postedAt: p.record?.createdAt || new Date().toISOString(),
@@ -380,7 +301,13 @@ export async function fetchLiveMastodonPosts(
   try {
     const baseUrl = instance.replace(/\/$/, '');
     const url = `${baseUrl}/api/v1/timelines/tag/${encodeURIComponent(tag)}?limit=20`;
-    const res = await fetch(url, { headers: { 'Accept': 'application/json' }, signal: options.signal });
+    const res = await fetch(url, {
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': 'EarthSignal/1.0 (public-earth-observation-research)',
+      },
+      signal: options.signal,
+    });
     if (!res.ok) throw new Error(`${new URL(baseUrl).hostname} returned ${res.status}`);
     const posts = await res.json();
     if (!Array.isArray(posts)) return [];
@@ -402,9 +329,9 @@ export async function fetchLiveMastodonPosts(
       });
 
       return {
-        id: `masto_${status.id || Math.random().toString(36).substring(2, 9)}`,
+        id: `masto_${status.id || stableTextId(`${status.uri || ''}:${status.created_at || ''}:${text}`)}`,
         source: 'mastodon',
-        sourceIdHash: String(status.id),
+        sourceIdHash: String(status.id || stableTextId(`${status.uri || ''}:${status.created_at || ''}:${text}`)),
         actorIdHash: status.account?.id ? String(status.account.id) : undefined,
         sourceUrl: status.url || status.uri || `${baseUrl}/tags/${encodeURIComponent(tag)}`,
         postedAt: status.created_at || new Date().toISOString(),
@@ -475,7 +402,7 @@ export function fetchLiveSocialPosts(): Promise<SocialFetchResponse> {
  */
 export function generateCellSocialSummary(
   cellId: string,
-  posts: SocialDerivedPost[] = SAMPLE_SOCIAL_POSTS,
+  posts: SocialDerivedPost[] = [],
   window: '1h' | '6h' | '24h' = '6h'
 ): SocialHourlySummary {
   const windowMs = { '1h': 60 * 60_000, '6h': 6 * 60 * 60_000, '24h': 24 * 60 * 60_000 }[window];
@@ -526,12 +453,6 @@ export function generateCellSocialSummary(
   const avgQuality = total > 0 ? totalQuality / total : 0;
   const locationExplicitRatio = total > 0 ? explicitLocationCount / total : 0;
 
-  // 観測異常度 (平常中央値 4.0件 に対する比率)
-  const median = 4.0;
-  const mad = 2.0;
-  const z = (total - median) / (1.4826 * mad);
-  const anomalyScore = Math.round(100 / (1 + Math.exp(-1.15 * (Math.max(0, z) - 2.0))));
-
   return {
     cellId,
     window,
@@ -541,11 +462,12 @@ export function generateCellSocialSummary(
       : new Set(cellPosts.map(p => p.actorIdHash || p.sourceIdHash)).size,
     locationExplicitRatio: Math.round(locationExplicitRatio * 100) / 100,
     qualityScore: Math.round(avgQuality * 100) / 100,
-    anomalyScore: Math.min(100, Math.max(0, anomalyScore)),
+    // SNSの平常時履歴は永続DBが整うまで推測値を置かない。
+    anomalyScore: null,
     categories,
     sources,
     analysisModes,
     globalTopicSpike: false,
-    notice: 'SNS投稿数の増加は地震の前兆を意味するものではありません（報道・気象等の代替要因があります）。',
+    notice: 'SNS異常度は同一地域・同時間帯の履歴が十分に蓄積された場合のみ算出します。投稿数の増加は地震の前兆を意味しません。',
   };
 }

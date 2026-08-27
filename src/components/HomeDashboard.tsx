@@ -259,7 +259,7 @@ export const HomeDashboard: React.FC<Props> = ({
               {/* 注意書き */}
               <div className="mt-3 pt-2.5 border-t border-slate-200/60 dark:border-slate-700/60 text-[11px] text-slate-500 dark:text-slate-400 flex items-center gap-1.5">
                 <AlertCircle className="w-3.5 h-3.5 text-amber-500 shrink-0" />
-                <span>この数値は過去30日の同時間帯との「珍しさ」を表すものであり、<strong>地震発生確率ではありません</strong>。</span>
+                <span>この数値は取得できた実測履歴との「珍しさ」を表すものであり、<strong>地震発生確率ではありません</strong>。履歴不足の項目は採点しません。</span>
               </div>
             </div>
 
@@ -342,7 +342,7 @@ export const HomeDashboard: React.FC<Props> = ({
                   10秒音響を録音
                 </h4>
                 <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                  周囲の音を10秒間録音し、YAMNet AIで動物の鳴き声・環境音を自動分類（元音声は即時削除）。
+                  周囲の音を10秒間録音し、端末内で信号品質を解析。聞こえた音は利用者が確認します（元音声は即時破棄）。
                 </p>
                 <span className="inline-block text-[11px] font-semibold text-indigo-600 dark:text-indigo-400 pt-1">
                   マイク録音を開始 →
@@ -365,7 +365,7 @@ export const HomeDashboard: React.FC<Props> = ({
                   雲写真を撮影・解析
                 </h4>
                 <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-                  気になった雲の写真をアップロード。EXIFのGPSを除去し、空占有率と気象学的雲形を解析します。
+                  気になった雲を端末内で解析。元写真・EXIFは保存せず、空占有率と利用者が選んだ雲形だけを記録します。
                 </p>
                 <span className="inline-block text-[11px] font-semibold text-cyan-600 dark:text-cyan-400 pt-1">
                   写真を投稿する →
@@ -407,15 +407,15 @@ export const HomeDashboard: React.FC<Props> = ({
             <div className="flex items-center gap-2">
               <Radio className="w-4 h-4 text-indigo-500" />
               <h4 className="font-bold text-slate-900 dark:text-white text-sm">
-                SNS公開集合知 リアルタイム観測状況（Bluesky / Mastodon / YouTube）
+                SNS公開集合知 リアルタイム観測状況（自動収集: Bluesky / Mastodon）
               </h4>
               <span className="text-[10px] px-2 py-0.5 rounded-full bg-indigo-50 dark:bg-indigo-950 text-indigo-600 dark:text-indigo-400 font-bold border border-indigo-200 dark:border-indigo-800">
                 {selectedCell.name}
               </span>
             </div>
             <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-              直近6時間の関連投稿: <strong>{selectedCell.socialSummary?.totalPosts ?? 18}件</strong> （独立投稿者推定: 約{selectedCell.socialSummary?.uniqueActorEstimate ?? 14}名 / 品質スコア: {selectedCell.socialSummary?.qualityScore ?? 0.74}）。
-              雲・空模様 ({selectedCell.socialSummary?.categories.cloud ?? 6}件) や動物・鳥類 ({selectedCell.socialSummary?.categories.animal ?? 5}件) の言及をAI/ルールベースで安全分類中。
+              直近6時間の関連投稿: <strong>{selectedCell.socialSummary?.totalPosts ?? 0}件</strong> （ハッシュ化識別子による投稿者数: {selectedCell.socialSummary?.uniqueActorEstimate ?? 0}名 / 品質スコア: {selectedCell.socialSummary?.qualityScore ?? 0}）。
+              雲・空模様 ({selectedCell.socialSummary?.categories.cloud ?? 0}件) や動物・鳥類 ({selectedCell.socialSummary?.categories.animal ?? 0}件) の言及をルールベースで分類しています。
             </p>
           </div>
 
@@ -483,7 +483,7 @@ export const HomeDashboard: React.FC<Props> = ({
               地震発生後の事後検証カタログ
             </h4>
             <p className="text-xs text-slate-300 leading-relaxed">
-              能登半島地震や千葉県東方沖などの過去の地震前24hデータと通常対照期間を統計比較。偽陽性事例も含め客観検証結果を公開中。
+              地震前24〜72時間と通常対照期間を比較する、将来のケース・コントロール分析画面を設計サンプルで確認できます。現在は研究結果ではありません。
             </p>
           </div>
 
@@ -512,6 +512,11 @@ export const HomeDashboard: React.FC<Props> = ({
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
+          {recentObservations.length === 0 && (
+            <div className="md:col-span-3 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 p-6 text-center text-xs text-slate-500">
+              まだ保存された市民観測はありません。音・雲・身の回りの変化を記録すると、ここに端末内保存の集計結果が表示されます。
+            </div>
+          )}
           {recentObservations.map((obs) => (
             <div
               key={obs.id}
@@ -532,7 +537,7 @@ export const HomeDashboard: React.FC<Props> = ({
               <div className="text-slate-800 dark:text-slate-200">
                 {obs.type === 'audio' && obs.audioAnalysis && (
                   <div>
-                    <span className="font-medium">AI検出音: </span>
+                    <span className="font-medium">端末内信号解析: </span>
                     {obs.audioAnalysis.topLabels.slice(0, 2).map((l) => `${l.displayName} (${Math.round(l.meanScore * 100)}%)`).join(', ')}
                     {obs.userConfirmation && (
                       <span className="block text-[11px] text-emerald-600 dark:text-emerald-400 mt-0.5">
@@ -544,10 +549,10 @@ export const HomeDashboard: React.FC<Props> = ({
 
                 {obs.type === 'cloud_photo' && obs.cloudAnalysis && (
                   <div>
-                    <span className="font-medium">雲形分類: </span>
+                    <span className="font-medium">利用者選択の雲形: </span>
                     {obs.cloudAnalysis.detectedCloudTypes[0]?.displayName}
                     <span className="block text-[11px] text-slate-500 mt-0.5">
-                      空占有率: {Math.round(obs.cloudAnalysis.skyCoverageRatio * 100)}% (EXIF位置除去済)
+                      空占有率: {Math.round(obs.cloudAnalysis.skyCoverageRatio * 100)}% (元写真・EXIFは未保存)
                     </span>
                   </div>
                 )}

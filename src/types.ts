@@ -1,6 +1,6 @@
 /**
  * EarthSignal - Type Definitions
- * Based on Requirements Document v2.0 (Complete Free Architecture)
+ * Based on the EarthSignal observation and anomaly-analysis domain model.
  */
 
 export type DataCategory = 'OFFICIAL' | 'OBSERVED' | 'DERIVED' | 'HYPOTHESIS';
@@ -42,9 +42,16 @@ export interface WeatherObservation {
   weatherCode: number;     // WMO code
   fetchedAt: string;
   isStale?: boolean;
+  baseline?: {
+    periodDays: number;
+    sampleCount: number;
+    cloudCoverHigh: { median: number; mad: number };
+    pressureChange24h: { median: number; mad: number };
+    temperature: { median: number; mad: number };
+  };
 }
 
-// 3. SNS集合知レイヤー (v2.0: Bluesky, Mastodon, YouTube, Misskey)
+// 3. SNS集合知レイヤー（現在の自動収集元: Bluesky / Mastodon）
 export type SocialCategory =
   | 'cloud'
   | 'animal'
@@ -102,15 +109,15 @@ export interface SocialHourlySummary {
   uniqueActorEstimate: number;
   locationExplicitRatio: number; // 地域明示率
   qualityScore: number; // 平均情報品質 0-1
-  anomalyScore: number; // 0 - 100
+  anomalyScore: number | null; // 履歴ベースラインがある場合のみ 0 - 100
   categories: Record<SocialCategory, number>;
   sources: Record<SocialSourceType, number>;
   analysisModes: Record<AnalysisMode, number>;
-  globalTopicSpike: boolean; // 全国的な話題急増フラグ
+  globalTopicSpike: boolean; // 長期・全国履歴が整った後に使う話題急増フラグ（現在はfalse）
   notice: string;
 }
 
-// 4. 音響AI分析 (YAMNet系)
+// 4. 音声信号の品質解析（音源分類モデルは未導入）
 export interface AudioLabel {
   label: string;
   displayName: string;
@@ -122,7 +129,7 @@ export interface AudioLabel {
 export interface AudioAnalysis {
   id: string;
   observationId: string;
-  modelVersion: string; // "yamnet-v1"
+  modelVersion: string;
   durationMs: number;
   rmsDb: number;
   clippingRatio: number;
@@ -135,11 +142,11 @@ export interface AudioAnalysis {
   completedAt: string;
 }
 
-// 5. 雲写真分析 (EXIF位置情報除去・気象雲形)
+// 5. 雲写真の端末内解析（保存結果に元画像・EXIFを含めない）
 export interface CloudAnalysis {
   id: string;
   observationId: string;
-  modelVersion: string; // "cloud-vit-v1"
+  modelVersion: string;
   skyCoverageRatio: number; // 0.0 - 1.0
   detectedCloudTypes: {
     type: 'cirrus' | 'altocumulus' | 'stratocumulus' | 'lenticular' | 'contrail' | 'cumulonimbus' | 'unknown';
@@ -148,7 +155,7 @@ export interface CloudAnalysis {
     confidence: number;
   }[];
   qualityScore: number; // 0.0 - 1.0
-  exifStripped: boolean; // EXIF GPS完全除去
+  exifStripped: boolean; // 保存結果にEXIF GPSを含まない
   captureDirection?: string;
   captureElevationAngle?: number;
 }
@@ -260,52 +267,7 @@ export interface PostEventEvaluation {
   scientificNotes: string;
 }
 
-// 10. 無料枠ガード & キルスイッチ (v2.0 Free Tier Guard & Kill Switches)
-export interface ResourceUsage {
-  resourceKey: string;
-  name: string;
-  used: number;
-  softLimit: number;
-  hardLimit: number;
-  unit: string;
-  state: 'normal' | 'soft_limit_exceeded' | 'stopped_for_today';
-  fallbackDescription: string;
-}
-
-export interface DataSourceHealth {
-  sourceName: string;
-  displayName: string;
-  enabled: boolean;
-  priority: number;
-  dailyCallsUsed: number;
-  dailyCallsLimit: number;
-  lastSuccessAt: string;
-  lastErrorAt?: string;
-  lastErrorCode?: string;
-  latencyMs: number;
-  status: 'ok' | 'degraded' | 'paused_budget' | 'disabled';
-}
-
-export interface KillSwitchSettings {
-  bluesky: boolean;
-  mastodon: boolean;
-  misskey: boolean;
-  youtube: boolean;
-  workersAi: boolean;
-  userReports: boolean;
-  p2pQuake: boolean;
-  openMeteo: boolean;
-}
-
-export interface FreeTierStatus {
-  dateUtc: string;
-  systemOverallState: 'normal' | 'degraded' | 'minimal_collection' | 'read_only';
-  resources: ResourceUsage[];
-  sources: DataSourceHealth[];
-  killSwitches: KillSwitchSettings;
-}
-
-// 11. 研究エクスポート設定
+// 10. 研究エクスポート設定
 export interface ExportRequest {
   datasetVersion: string;
   cellIds: string[];

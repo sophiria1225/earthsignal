@@ -31,7 +31,7 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
   const [selectedLabels, setSelectedLabels] = useState<string[]>([]);
   const [userComment, setUserComment] = useState('');
   const [visibility, setVisibility] = useState<'aggregate_only' | 'anonymous_public'>('aggregate_only');
-  const [privacyAgreed, setPrivacyAgreed] = useState(true);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
   const audioContextRef = useRef<AudioContext | null>(null);
@@ -44,6 +44,7 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
   // 録音開始
   const startRecording = async () => {
     try {
+      setAnalysisError(null);
       audioChunksRef.current = [];
       const stream = await navigator.mediaDevices.getUserMedia({ audio: true });
       streamRef.current = stream;
@@ -78,11 +79,7 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
           const obsId = `obs_aud_${Date.now()}`;
           const analysis = classifyAudioFeatures(metrics, obsId);
           setAnalysisResult(analysis);
-          
-          // 初期選択ラベル
-          if (analysis.topLabels.length > 0) {
-            setSelectedLabels([analysis.topLabels[0].displayName]);
-          }
+          setSelectedLabels([]);
 
           // 会話比率が高い場合はプライバシー保護のため匿名集計のみに強制
           if (analysis.speechRatio > 0.15) {
@@ -90,20 +87,14 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
           }
 
           setRecordingState('confirming');
+          audioChunksRef.current = [];
+          if (audioCtx.state !== 'closed') await audioCtx.close();
         } catch (err) {
           console.error('Audio decode error:', err);
-          // フォールバック
-          const dummyMetrics = {
-            durationMs: 10000,
-            rmsDb: -24.0,
-            clippingRatio: 0.0,
-            silenceRatio: 0.05,
-            speechRatio: 0.02,
-            qualityScore: 0.88,
-          };
-          const analysis = classifyAudioFeatures(dummyMetrics, `obs_aud_${Date.now()}`);
-          setAnalysisResult(analysis);
-          setRecordingState('confirming');
+          audioChunksRef.current = [];
+          setAnalysisResult(null);
+          setAnalysisError('このブラウザでは録音データを解析できませんでした。別のブラウザで再度お試しください。');
+          setRecordingState('idle');
         }
       };
 
@@ -186,7 +177,7 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
       audioAnalysis: analysisResult,
       userConfirmation: {
         confirmedLabels: selectedLabels,
-        aiResultCorrect: 'yes',
+        aiResultCorrect: 'unknown',
         userNotes: userComment,
       },
     };
@@ -210,7 +201,7 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
             </div>
             <div>
               <h3 className="font-bold text-slate-900 dark:text-white text-base">
-                10秒音響観測 (YAMNet AI)
+                10秒音響観測
               </h3>
               <span className="text-xs text-slate-500">
                 観測対象セル: {cell.name}
@@ -240,18 +231,24 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
                   周囲の環境音を10秒間録音します
                 </h4>
                 <p className="text-xs text-slate-600 dark:text-slate-400 max-w-md mx-auto leading-relaxed">
-                  犬や鳥の鳴き声、風、環境ノイズをYAMNet AIで自動分類します。会話音声の文字起こしや盗聴は行いません。
+                  端末内で音量・無音率・クリッピング・会話らしさを解析し、聞こえた音の種類は利用者が確認します。文字起こしは行いません。
                 </p>
               </div>
+
+              {analysisError && (
+                <div className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-xs text-rose-700 dark:text-rose-300">
+                  {analysisError}
+                </div>
+              )}
 
               {/* プライバシー保護規約の明記 */}
               <div className="bg-slate-50 dark:bg-slate-900/60 p-3.5 rounded-xl border border-slate-200/60 dark:border-slate-800 text-left text-xs space-y-1.5">
                 <div className="flex items-center gap-1.5 font-semibold text-slate-800 dark:text-slate-200">
                   <ShieldCheck className="w-4 h-4 text-emerald-500" />
-                  プライバシー保護・自動削除保証 (第13.5章 / 第22章)
+                  プライバシー保護 (第13.5章 / 第22章)
                 </div>
                 <ul className="list-disc list-inside text-[11px] text-slate-500 dark:text-slate-400 space-y-1">
-                  <li><strong>生音声は解析完了直後に自動削除</strong>され、サーバに長期保存されません。</li>
+                  <li><strong>生音声はサーバーへ送信・保存せず</strong>、端末内解析後にアプリから参照を破棄します。</li>
                   <li>会話比率が高い音声は公衆公開を自動ブロックし、匿名集計のみに限定されます。</li>
                   <li>公開位置は精密座標ではなく、地域セル（約5〜10km圏）の中心へ丸められます。</li>
                 </ul>
@@ -316,10 +313,10 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
               <div className="w-12 h-12 mx-auto border-4 border-indigo-600 border-t-transparent rounded-full animate-spin" />
               <div className="space-y-1">
                 <h4 className="font-bold text-slate-900 dark:text-white text-base">
-                  YAMNet AIで音響分類中...
+                  端末内で音響品質を解析中...
                 </h4>
                 <p className="text-xs text-slate-500">
-                  周波数スペクトル解析、品質評価、会話比率を計算しています
+                  音量・無音率・クリッピング・ゼロ交差率から品質指標を計算しています
                 </p>
               </div>
             </div>
@@ -329,12 +326,12 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
           {recordingState === 'confirming' && analysisResult && (
             <div className="space-y-5">
               
-              {/* AI検出結果 */}
+              {/* 端末内信号解析結果 */}
               <div className="bg-slate-50 dark:bg-slate-900/60 p-4 rounded-xl border border-slate-200 dark:border-slate-800 space-y-3">
                 <div className="flex items-center justify-between">
                   <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 flex items-center gap-1">
                     <Sparkles className="w-4 h-4" />
-                    AI検出音 (YAMNet 521 AudioSet)
+                    端末内の信号品質解析
                   </span>
                   <span className="text-[11px] text-slate-500">
                     録音品質: {(analysisResult.qualityScore * 100).toFixed(0)}%
@@ -357,7 +354,7 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
                             style={{ width: `${Math.round(item.meanScore * 100)}%` }}
                           />
                         </div>
-                        <span className="font-bold text-slate-600 dark:text-slate-300 w-10 text-right">
+                        <span className="font-bold text-slate-600 dark:text-slate-300 w-10 text-right" title="信号中の該当比率または正規化レベル">
                           {(item.meanScore * 100).toFixed(0)}%
                         </span>
                       </div>
@@ -380,7 +377,7 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
                   実際に聞こえた音を選択してください (利用者の確認):
                 </label>
                 <div className="flex flex-wrap gap-1.5">
-                  {['犬の鳴き声 (Bark/Howl)', '猫の鳴き声', '野鳥のさえずり', 'カラス', '虫・カエルの声', '風切り音', '環境音・交通ノイズ', '特に聞こえなかった'].map((label) => {
+                  {['犬の鳴き声', '猫の鳴き声', '野鳥のさえずり', 'カラス', '虫・カエルの声', '地鳴りのような低い音', '風切り音', '環境音・交通ノイズ', '特に聞こえなかった'].map((label) => {
                     const isSelected = selectedLabels.includes(label);
                     return (
                       <button
@@ -423,7 +420,7 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
               {/* 生音声破棄通知 */}
               <div className="p-2.5 bg-emerald-500/10 border border-emerald-500/20 rounded-xl text-xs text-emerald-800 dark:text-emerald-300 flex items-center gap-2">
                 <Lock className="w-4 h-4 text-emerald-600 shrink-0" />
-                <span>✓ 生音声データはメモリから安全に破棄されました（特徴量と分類結果のみ保存）。</span>
+                <span>✓ 生音声データはメモリから破棄されました（品質指標と利用者が確認したラベルのみ保存）。</span>
               </div>
 
               <div className="flex items-center gap-3 pt-2">
@@ -435,7 +432,8 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
                 </button>
                 <button
                   onClick={handleFinalize}
-                  className="w-2/3 bg-indigo-600 hover:bg-indigo-700 text-white py-2.5 rounded-xl text-xs font-bold shadow-md shadow-indigo-500/20"
+                  disabled={selectedLabels.length === 0}
+                  className="w-2/3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2.5 rounded-xl text-xs font-bold shadow-md shadow-indigo-500/20"
                 >
                   観測を確定・送信
                 </button>

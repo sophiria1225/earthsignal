@@ -1,6 +1,6 @@
 /**
  * EarthSignal - Robust Anomaly Score Engine (v2.0)
- * Implements Section 14 of Requirements Document v2.0 (Complete Free Edition)
+ * Uses only available observations and real baselines; missing categories remain unscored.
  * Uses Median, MAD, Robust Z-score, Logistic 0-100 scaling, and Quality Coefficients
  */
 
@@ -61,8 +61,8 @@ export function robustAnomalyScore(
 }
 
 /**
- * 14.6 品質係数 (0.0〜1.0)
- * value = 0.20*freshness + 0.25*sampleAdequacy + 0.20*sourceAvailability + 0.20*geoConfidence + 0.15*classifierConfidence
+ * 品質係数 (0.0〜1.0)
+ * 実際に確認できる鮮度・標本充足度・採用カテゴリ範囲だけで構成する。
  */
 export function calculateQualityScore(params: {
   sampleCount: number;
@@ -70,19 +70,13 @@ export function calculateQualityScore(params: {
   sourceAvailability?: number;
   minutesSinceUpdate?: number;
   isHighWindOrRain?: boolean;
-  uniqueContributors?: number;
-  geoConfidence?: number;
-  classifierConfidence?: number;
 }): number {
   const {
     sampleCount,
     targetSamples = 30,
-    sourceAvailability = 0.95,
-    minutesSinceUpdate = 5,
+    sourceAvailability = 0,
+    minutesSinceUpdate = 999,
     isHighWindOrRain = false,
-    uniqueContributors = 3,
-    geoConfidence = 0.85,
-    classifierConfidence = 0.88,
   } = params;
 
   // 鮮度 (0..1)
@@ -92,16 +86,11 @@ export function calculateQualityScore(params: {
   const weatherPenalty = isHighWindOrRain ? 0.75 : 1.0;
 
   const value =
-    0.20 * freshness * weatherPenalty +
-    0.25 * sampleAdequacy +
-    0.20 * sourceAvailability +
-    0.20 * geoConfidence +
-    0.15 * classifierConfidence;
+    0.40 * freshness * weatherPenalty +
+    0.40 * sampleAdequacy +
+    0.20 * Math.max(0, Math.min(1, sourceAvailability));
 
-  // 投稿者多様性による補正
-  const diversityMult = Math.min(1.0, 0.4 + (uniqueContributors * 0.15));
-
-  return Math.max(0.05, Math.min(1.0, Math.round(value * diversityMult * 100) / 100));
+  return Math.max(0.05, Math.min(1.0, Math.round(value * 100) / 100));
 }
 
 /**
@@ -112,7 +101,7 @@ export function computeCellScore(
   features: FeatureInput[],
   weatherInfo: { windSpeed: number; precipitation: number; minutesSinceUpdate: number },
   uniqueUserCount: number,
-  socialAnomalyScore?: number
+  socialAnomalyScore?: number | null
 ): CellScore {
   const isBadWeather = weatherInfo.windSpeed >= 6.0 || weatherInfo.precipitation >= 2.0;
   const confounders: string[] = [];
@@ -124,7 +113,7 @@ export function computeCellScore(
     confounders.push(`降雨(${weatherInfo.precipitation}mm)による環境音分離`);
   }
   if (uniqueUserCount < 3) {
-    confounders.push(`観測標本数(${uniqueUserCount}件)が少数のため多様性係数を抑制`);
+    confounders.push(`市民観測は${uniqueUserCount}件のため、3件に達するまで市民観測スコアへ採用しません`);
   }
 
   const categoryScores: Record<string, { totalScoreWeight: number; totalWeight: number; count: number }> = {
@@ -176,18 +165,10 @@ export function computeCellScore(
 
   const eqScore = getCatScore('earthquake');
   const wxScore = getCatScore('weather');
-  const socialScore = socialAnomalyScore !== undefined ? socialAnomalyScore : getCatScore('social');
+  const socialScore = socialAnomalyScore != null ? socialAnomalyScore : getCatScore('social');
   const animalScore = getCatScore('animal_audio');
   const otherAudioScore = getCatScore('other_audio');
   const citizenScore = getCatScore('citizen_report');
-
-  const quality = calculateQualityScore({
-    sampleCount: totalSampleCount,
-    targetSamples: 30,
-    minutesSinceUpdate: weatherInfo.minutesSinceUpdate,
-    isHighWindOrRain: isBadWeather,
-    uniqueContributors: uniqueUserCount,
-  });
 
   // v2.0 14.7 総合重み配分
   const categoryWeights = [
@@ -200,15 +181,22 @@ export function computeCellScore(
 
   const usable = categoryWeights.filter(c => c.score !== null);
   const weightSum = usable.reduce((s, c) => s + c.weight, 0);
+  const quality = calculateQualityScore({
+    sampleCount: totalSampleCount,
+    targetSamples: 30,
+    sourceAvailability: weightSum,
+    minutesSinceUpdate: weatherInfo.minutesSinceUpdate,
+    isHighWindOrRain: isBadWeather,
+  });
 
   let overallScore: number | null = null;
   let status: 'available' | 'insufficient' | 'stale' = 'available';
 
-  if (weightSum < 0.50 || quality < 0.20) {
+  if (weightSum < 0.20 || quality < 0.20) {
     status = 'insufficient';
   } else {
-    const weightedSum = usable.reduce((s, c) => s + Number(c.score) * c.weight * quality, 0);
-    overallScore = Math.round((weightedSum / (weightSum * quality)) * 10) / 10;
+    const weightedSum = usable.reduce((s, c) => s + Number(c.score) * c.weight, 0);
+    overallScore = Math.round((weightedSum / weightSum) * 10) / 10;
     if (weatherInfo.minutesSinceUpdate > 90) {
       status = 'stale';
     }
@@ -220,7 +208,7 @@ export function computeCellScore(
     explanationText = 'この地域は有効観測標本数またはデータ品質が基準値を満たしていないため、統計的異常度は「データ不足」として計算を控えています。';
   } else {
     const topDeviations = [...contributors].sort((a, b) => Math.abs(b.zScore) - Math.abs(a.zScore)).slice(0, 2);
-    const devSummaries = topDeviations.map(d => `${d.displayName}が過去30日同時間帯中央値比 ${d.changeRate} (z=${d.zScore})`);
+    const devSummaries = topDeviations.map(d => `${d.displayName}が対応する実測ベースライン中央値比 ${d.changeRate} (z=${d.zScore})`);
     
     explanationText = `この地域では、${devSummaries.length > 0 ? devSummaries.join('、') : '各指標が平常範囲で推移'}しており、平常時からの統計的な珍しさは ${overallScore} / 100 (品質: ${quality}) です。${
       confounders.length > 0 ? `※${confounders.join('。')}。` : ''
@@ -229,7 +217,7 @@ export function computeCellScore(
 
   return {
     scoreAt: new Date().toISOString(),
-    scoreVersion: 'score-v2-robust',
+    scoreVersion: 'score-v3-live-baseline',
     status,
     overallScore,
     qualityScore: quality,
@@ -250,75 +238,146 @@ export function computeCellScore(
  * GeoCell, 観測データ, 地震データ, SNS集計からスコアを再計算する統合ヘルパー
  */
 export function calculateRobustAnomalyScore(
-  cell: { id: string; name: string; weather: any; currentScore: CellScore },
+  cell: { id: string; name: string; center: { latitude: number; longitude: number }; weather: any; currentScore: CellScore },
   cellObservations: any[],
   recentEarthquakes: any[],
-  socialAnomalyScore?: number
+  socialAnomalyScore?: number | null
 ): CellScore {
   const weather = cell.weather;
-  const features: FeatureInput[] = [
-    {
+  const features: FeatureInput[] = [];
+  const baseline = weather.baseline;
+
+  if (baseline?.sampleCount >= 7) {
+    features.push({
       name: 'cloud_cover_high',
       displayName: '上層雲量 (卷雲・巻積雲)',
       category: 'weather',
-      currentValue: weather.cloudCoverHigh || 20,
-      baseline: { median: 18, mad: 8, sampleCount: 28 },
+      currentValue: weather.cloudCoverHigh,
+      baseline: { ...baseline.cloudCoverHigh, sampleCount: baseline.sampleCount },
       weight: 1.0,
       direction: 'both',
       unit: '%',
-    },
-    {
+    }, {
       name: 'sea_level_pressure_diff',
       displayName: '24時間気圧変動幅',
       category: 'weather',
-      currentValue: Math.abs(weather.pressureChange24h || 2.1),
-      baseline: { median: 2.0, mad: 1.2, sampleCount: 30 },
+      currentValue: weather.pressureChange24h,
+      baseline: { ...baseline.pressureChange24h, sampleCount: Math.max(0, baseline.sampleCount - 1) },
       weight: 0.9,
-      direction: 'up',
+      direction: 'both',
       unit: 'hPa',
-    },
-    {
-      name: 'animal_audio_anomaly',
-      displayName: '動物音響・遠吠え頻度',
-      category: 'animal_audio',
-      currentValue: cellObservations.filter(o => o.type === 'audio').length * 2 + 15,
-      baseline: { median: 12, mad: 4, sampleCount: 24 },
-      weight: 1.2,
-      direction: 'up',
-      unit: '件/h',
-    },
-    {
+    }, {
+      name: 'temperature_same_hour',
+      displayName: '同時間帯気温',
+      category: 'weather',
+      currentValue: weather.temperature,
+      baseline: { ...baseline.temperature, sampleCount: baseline.sampleCount },
+      weight: 0.6,
+      direction: 'both',
+      unit: '℃',
+    });
+  }
+
+  const reports = cellObservations.filter(o => o.type === 'citizen_report' && o.citizenReport);
+  if (reports.length >= 3) {
+    const meanDifference = reports.reduce((sum, observation) =>
+      sum + Number(observation.citizenReport.differenceFromNormal || 1), 0) / reports.length;
+    features.push({
       name: 'citizen_reports',
-      displayName: '市民構造化レポート',
+      displayName: '市民レポートの「普段との差」自己評価',
       category: 'citizen_report',
-      currentValue: cellObservations.filter(o => o.type === 'citizen_report').length * 3 + 8,
-      baseline: { median: 7, mad: 3, sampleCount: 20 },
+      currentValue: Math.round(meanDifference * 10) / 10,
+      baseline: { median: 1, mad: 0.75, sampleCount: reports.length },
       weight: 1.0,
       direction: 'up',
-      unit: '件/h',
-    },
-    {
+      unit: '/5',
+    });
+  }
+
+  const dailyNearbyCounts = calculateDailyNearbyEarthquakeCounts(
+    cell.center,
+    recentEarthquakes,
+    7,
+    250
+  );
+  const validEarthquakeTimes = recentEarthquakes
+    .map(earthquake => Date.parse(earthquake.occurredAt))
+    .filter(Number.isFinite);
+  const hasSevenDayEarthquakeCoverage = validEarthquakeTimes.length > 0
+    && Math.min(...validEarthquakeTimes) <= Date.now() - 6 * 24 * 60 * 60_000;
+  if (dailyNearbyCounts.length >= 4 && hasSevenDayEarthquakeCoverage) {
+    const currentCount = dailyNearbyCounts[0];
+    const history = dailyNearbyCounts.slice(1);
+    const historyMedian = median(history);
+    const historyMad = Math.max(0.5, median(history.map(value => Math.abs(value - historyMedian))));
+    features.push({
       name: 'micro_seismicity',
-      displayName: '地域微小地震活動頻度',
+      displayName: '周辺250kmの地震情報件数',
       category: 'earthquake',
-      currentValue: recentEarthquakes.filter(eq => eq.magnitude && eq.magnitude > 2.0).length > 0 ? 3 : 1,
-      baseline: { median: 1, mad: 0.8, sampleCount: 30 },
+      currentValue: currentCount,
+      baseline: { median: historyMedian, mad: historyMad, sampleCount: history.length },
       weight: 1.0,
       direction: 'up',
-      unit: '回/週',
-    },
-  ];
+      unit: '件/日',
+    });
+  }
+
+  const fetchedAtMs = Date.parse(weather.fetchedAt || '');
+  const minutesSinceUpdate = Number.isFinite(fetchedAtMs)
+    ? Math.max(0, (Date.now() - fetchedAtMs) / 60_000)
+    : 999;
 
   return computeCellScore(
     features,
     {
-      windSpeed: weather.windSpeed || 2.5,
-      precipitation: weather.precipitation || 0.0,
-      minutesSinceUpdate: 5,
+      windSpeed: weather.windSpeed || 0,
+      precipitation: weather.precipitation || 0,
+      minutesSinceUpdate,
     },
-    Math.max(3, cellObservations.length + 2),
+    reports.length,
     socialAnomalyScore
   );
 }
 
+function median(values: number[]): number {
+  if (values.length === 0) return 0;
+  const sorted = [...values].sort((a, b) => a - b);
+  const middle = Math.floor(sorted.length / 2);
+  return sorted.length % 2 === 0
+    ? (sorted[middle - 1] + sorted[middle]) / 2
+    : sorted[middle];
+}
 
+export function calculateDistanceKm(
+  from: { latitude: number; longitude: number },
+  to: { latitude: number; longitude: number }
+): number {
+  const toRadians = (degrees: number) => degrees * Math.PI / 180;
+  const earthRadiusKm = 6371;
+  const dLat = toRadians(to.latitude - from.latitude);
+  const dLon = toRadians(to.longitude - from.longitude);
+  const lat1 = toRadians(from.latitude);
+  const lat2 = toRadians(to.latitude);
+  const a = Math.sin(dLat / 2) ** 2
+    + Math.cos(lat1) * Math.cos(lat2) * Math.sin(dLon / 2) ** 2;
+  return 2 * earthRadiusKm * Math.asin(Math.sqrt(a));
+}
+
+export function calculateDailyNearbyEarthquakeCounts(
+  center: { latitude: number; longitude: number },
+  earthquakes: Array<{ occurredAt: string; latitude: number; longitude: number; magnitude: number | null }>,
+  days = 7,
+  radiusKm = 250
+): number[] {
+  const now = Date.now();
+  const dayMs = 24 * 60 * 60_000;
+  const counts = Array.from({ length: days }, () => 0);
+  for (const earthquake of earthquakes) {
+    const occurredAt = Date.parse(earthquake.occurredAt);
+    if (!Number.isFinite(occurredAt) || earthquake.magnitude == null || earthquake.magnitude < 2) continue;
+    const dayIndex = Math.floor((now - occurredAt) / dayMs);
+    if (dayIndex < 0 || dayIndex >= days) continue;
+    if (calculateDistanceKm(center, earthquake) <= radiusKm) counts[dayIndex] += 1;
+  }
+  return counts;
+}

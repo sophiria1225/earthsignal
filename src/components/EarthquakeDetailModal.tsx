@@ -113,7 +113,7 @@ export const EarthquakeDetailModal: React.FC<Props> = ({ earthquake, onClose }) 
             <div className="p-3 bg-amber-500/10 border border-amber-500/20 rounded-xl text-amber-900 dark:text-amber-200 flex items-start gap-2">
               <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0 mt-0.5" />
               <span>
-                <strong>地震予知との混同防止:</strong> この地震発生前の観測異常データは「事後検証」タブにてケース・コントロール研究データとして客観検証されます。
+                <strong>地震予知との混同防止:</strong> 現在の「事後検証」タブは、将来のケース・コントロール分析手順を示す設計サンプルです。実研究結果ではありません。
               </span>
             </div>
           </div>

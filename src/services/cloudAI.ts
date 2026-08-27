@@ -1,7 +1,7 @@
 /**
- * EarthSignal - Cloud Photo AI & Privacy Image Processing
+ * EarthSignal - Cloud Photo Signal Analysis & Privacy Processing
  * Implements Section 15 of Requirements Document v1.0
- * Strips EXIF/GPS, estimates sky coverage, classifies general meteorological cloud forms without bias
+ * Keeps the source image local, estimates sky coverage, and records the user's cloud-shape selection.
  */
 
 import { CloudAnalysis } from '../types';
@@ -22,7 +22,7 @@ export async function analyzeCloudImage(
   captureDirection?: string,
   captureElevationAngle?: number
 ): Promise<CloudAnalysis> {
-  // 画像メタデータ・画像読み込み
+  // 画像は端末内でピクセルへ展開し、元ファイルやメタデータを保存・送信しない。
   const imageBitmap = await createImageBitmap(file);
   const canvas = document.createElement('canvas');
   const maxDimension = 512;
@@ -68,7 +68,7 @@ export async function analyzeCloudImage(
     }
   }
 
-  const skyCoverageRatio = Math.max(0.2, Math.min(1.0, (skyPixels + brightCloudPixels) / (totalPixels || 1)));
+  const skyCoverageRatio = Math.max(0, Math.min(1.0, (skyPixels + brightCloudPixels) / (totalPixels || 1)));
   const qualityScore = skyCoverageRatio > 0.4 ? 0.92 : 0.65;
 
   // 一般気象学に基づく雲形候補
@@ -79,55 +79,48 @@ export async function analyzeCloudImage(
       type: 'altocumulus',
       displayName: '高積雲（波状雲・ひつじ雲）',
       description: '上空2,000〜6,000m。大気の波（重力波）によって筋状や波状に並ぶ気象学的な一般的な雲です。',
-      confidence: 0.86,
+      confidence: 1,
     });
   } else if (userShapeHint === 'streak' || userShapeHint === 'cirrus') {
     detectedCloudTypes.push({
       type: 'cirrus',
       displayName: '巻雲（すじ雲・放射状巻雲）',
       description: '上空5,000〜13,000m。氷の結晶で構成され、ジェット気流や上空の強風に伴って放射状・筋状に広がります。',
-      confidence: 0.89,
+      confidence: 1,
     });
   } else if (userShapeHint === 'lenticular') {
     detectedCloudTypes.push({
       type: 'lenticular',
       displayName: 'レンズ雲（吊るし雲）',
       description: '山岳波や上空の強風時に、湿った空気が上昇・下降する定在波によって同じ場所に静止して見える雲です。',
-      confidence: 0.92,
+      confidence: 1,
     });
   } else if (userShapeHint === 'contrail') {
     detectedCloudTypes.push({
       type: 'contrail',
       displayName: '飛行機雲（消滅しにくい巻雲状）',
       description: '航空機エンジンの排気ガスに含まれる水分が上空の氷点下で凍結し、上空が多湿な場合に長く残る雲です。',
-      confidence: 0.82,
+      confidence: 1,
     });
   } else {
-    // デフォルト推定
-    detectedCloudTypes.push(
-      {
-        type: 'cirrus',
-        displayName: '巻雲・巻層雲（すじ状・薄雲）',
-        description: '上層大気の強風や気圧変化に伴い発生する氷晶の雲です。',
-        confidence: 0.76,
-      },
-      {
-        type: 'altocumulus',
-        displayName: '高積雲（波状・斑状）',
-        description: '中層大気の気温勾配や風のせん断によって規則的な波模様を形成します。',
-        confidence: 0.64,
-      }
-    );
+    detectedCloudTypes.push({
+      type: 'unknown',
+      displayName: '雲形は未判定',
+      description: '現在の端末内処理は空らしい画素の比率のみを推定します。雲形を画像から自動判定する学習モデルは未導入です。',
+      confidence: 0,
+    });
   }
+
+  imageBitmap.close();
 
   return {
     id: `cld_an_${Date.now()}`,
     observationId,
-    modelVersion: 'cloud-vit-v1.0',
+    modelVersion: 'pixel-color-heuristic-v1',
     skyCoverageRatio: Math.round(skyCoverageRatio * 100) / 100,
     detectedCloudTypes,
     qualityScore: Math.round(qualityScore * 100) / 100,
-    exifStripped: true, // EXIF位置情報は完全除去
+    exifStripped: true, // 保存する解析結果には元画像やEXIF項目を含めない
     captureDirection: captureDirection || '不明',
     captureElevationAngle: captureElevationAngle || 45,
   };

@@ -53,7 +53,7 @@ export const ResearchInfoView: React.FC = () => {
             過去に民間やSNSで「前兆現象」と主張された事例の多くは、地震発生後に偶然の出来事を後付けで結びつける「想起バイアス（Confirmation Bias）」や、低気圧接近に伴う気象現象（大気擾乱による雲の筋や強風音）であることが学術的に示されています。
           </p>
           <p>
-            本プラットフォームでは、「地震が起きるかどうか」を予測・警告するのではなく、<strong>「過去30日間の同一地域・同一時間帯のベースラインと比べて、現在の観測データが統計的にどれだけ珍しい状態にあるか（Robust Z-Score）」</strong>を客観的指標として算出・蓄積し、学術的な事後検証に供することを目的としています。
+            本プラットフォームでは、「地震が起きるかどうか」を予測・警告するのではなく、<strong>利用可能な実測履歴（気象は過去30日の同一地域・同一時間帯）と比べて、現在の観測データが統計的にどれだけ珍しいか</strong>を算出します。履歴が不足するSNS・市民観測は推測値を置かず、データ不足として扱います。
           </p>
         </div>
       </div>
@@ -79,10 +79,10 @@ export const ResearchInfoView: React.FC = () => {
           <div className="bg-slate-50 dark:bg-slate-900/60 p-4 rounded-xl border border-slate-200/80 dark:border-slate-800 font-mono text-slate-800 dark:text-slate-200 space-y-2">
             <span className="text-[11px] font-sans font-bold text-slate-500 block">■ 観測異常度スコア変換 (0〜100):</span>
             <div className="text-center py-1 text-sm text-purple-600 dark:text-purple-400 font-bold">
-              Score = min(100, max(0, (|Z_robust| / 3.0) * 100 * Q))
+              Score = 100 / (1 + exp(-1.15 × (|Z_robust| - 2.0)))
             </div>
             <span className="text-[11px] font-sans text-slate-500 block">
-              ※k=3.0 (3シグマ相当) で100点に到達。Qは標本数・風速ノイズによる品質係数 (0.0〜1.0)。
+              ※ロジスティック変換で外れ値の影響を抑えます。品質Qはスコアとは別に表示し、低品質データを「正常」に見せない設計です。
             </span>
           </div>
         </div>
@@ -102,14 +102,14 @@ export const ResearchInfoView: React.FC = () => {
               10秒音響の生音声即時破棄
             </span>
             <p className="text-slate-600 dark:text-slate-400 leading-relaxed">
-              ブラウザまたは端末側でWeb Audio API / YAMNetを用いて周波数特徴量とクラス確率のみを抽出。録音された生音声データは解析完了と同時に破棄され、サーバに長期保管されません。
+              ブラウザ内のWeb Audio APIで音量・無音率・クリッピング等の信号品質だけを算出し、音の種類は利用者が確認します。録音された生音声は解析完了と同時にメモリから破棄され、サーバへ送信しません。
             </p>
           </div>
 
           <div className="p-4 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200/60 dark:border-slate-800 space-y-2">
             <span className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5">
               <Camera className="w-4 h-4 text-cyan-500" />
-              EXIFメタデータの自動除去
+              元写真・EXIFを保存しない端末内解析
             </span>
             <p className="text-slate-600 dark:text-slate-400 leading-relaxed">
               アップロードされた写真から、自宅住所が特定されるGPS緯度経度・端末固有情報を即座にストリップ（除去）します。公開される位置はH3地理セルの中心座標に丸められます。
@@ -135,7 +135,7 @@ export const ResearchInfoView: React.FC = () => {
           </li>
           <li className="flex items-center gap-2">
             <span className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
-            <span><strong>YAMNet / AudioSet (Google Research):</strong> 521カテゴリの環境音・動物鳴き声を分類するディープニューラルネットワーク。</span>
+            <span><strong>端末内音響品質解析:</strong> Web Audio APIによるRMS音量・無音率・クリッピング・簡易会話比率。現時点では音源分類AIを使用していません。</span>
           </li>
         </ul>
       </div>

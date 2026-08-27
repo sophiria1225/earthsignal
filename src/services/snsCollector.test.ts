@@ -66,4 +66,5 @@ test('地域と時間窓に一致するライブ投稿だけを集計する', ()
   assert.equal(summary.totalPosts, 1);
   assert.equal(summary.uniqueActorEstimate, 1);
   assert.equal(summary.sources.bluesky, 1);
+  assert.equal(summary.anomalyScore, null);
 });
