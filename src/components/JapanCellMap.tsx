@@ -23,6 +23,10 @@ export const JapanCellMap: React.FC<Props> = ({
 }) => {
   const [activeLayer, setActiveLayer] = useState<MapLayerType>('overall');
   const [hoveredCell, setHoveredCell] = useState<GeoCell | null>(null);
+  const visibleEarthquakes = recentEarthquakes
+    .filter(earthquake => earthquake.latitude >= 24 && earthquake.latitude <= 46
+      && earthquake.longitude >= 125 && earthquake.longitude <= 146)
+    .slice(0, 20);
 
   // レイヤー別のセル色決定ロジック
   const getCellColor = (cell: GeoCell) => {
@@ -203,12 +207,12 @@ export const JapanCellMap: React.FC<Props> = ({
               </g>
 
               {/* 最近の公式地震震源地マーカー (P2P地震情報) */}
-              {recentEarthquakes.map((eq) => {
+              {visibleEarthquakes.map((eq) => {
                 // 簡易座標マッピング (緯度 24-46 -> y 650-80, 経度 125-146 -> x 120-720)
                 const px = 120 + ((eq.longitude - 125) / 21) * 600;
                 const py = 650 - ((eq.latitude - 24) / 22) * 570;
-                const mag = eq.magnitude || 3.5;
-                const radius = Math.max(6, Math.min(18, (mag - 2) * 5));
+                const markerMagnitude = eq.magnitude ?? 3;
+                const radius = Math.max(6, Math.min(18, (markerMagnitude - 2) * 5));
 
                 return (
                   <g
@@ -222,7 +226,7 @@ export const JapanCellMap: React.FC<Props> = ({
                     }}
                     role="button"
                     tabIndex={0}
-                    aria-label={`${eq.hypocenterName} マグニチュード${mag.toFixed(1)}の地震詳細を開く`}
+                    aria-label={`${eq.hypocenterName} ${eq.magnitude !== null ? `マグニチュード${eq.magnitude.toFixed(1)}` : '規模不明'}の地震詳細を開く`}
                     className="cursor-pointer group"
                   >
                     <circle
@@ -252,7 +256,7 @@ export const JapanCellMap: React.FC<Props> = ({
                       fontSize="9"
                       fontWeight="bold"
                     >
-                      M{mag.toFixed(1)} {eq.hypocenterName.slice(0, 4)}
+                      {eq.magnitude !== null ? `M${eq.magnitude.toFixed(1)}` : 'M?'} {eq.hypocenterName.slice(0, 4)}
                     </text>
                   </g>
                 );
@@ -338,7 +342,7 @@ export const JapanCellMap: React.FC<Props> = ({
 
           {/* 下部情報バー */}
           <div className="flex items-center justify-between text-[11px] text-slate-400 bg-slate-950/60 p-2.5 rounded-xl border border-slate-800">
-            <span>● 震源地マーカー: P2P地震情報 ({recentEarthquakes.length}件)</span>
+            <span>● 震源地マーカー: 日本周辺の直近{visibleEarthquakes.length}件（最大20件）</span>
             <span>⬡ 六角形セル: 対応地域 ({cells.length}箇所)</span>
           </div>
         </div>
@@ -412,13 +416,13 @@ export const JapanCellMap: React.FC<Props> = ({
               </div>
             )}
 
-            {/* このセルで観測を投稿するボタン */}
+            {/* このセルで観測を記録するボタン */}
             <button
               onClick={() => onOpenRecordForCell(selectedCell)}
               className="w-full bg-indigo-600 hover:bg-indigo-700 text-white font-medium text-xs sm:text-sm py-2.5 rounded-xl transition-colors shadow-sm flex items-center justify-center gap-2"
             >
               <MapPin className="w-4 h-4" />
-              この地域で10秒録音・観測を投稿
+              この地域で10秒録音・観測を記録
             </button>
           </div>
         </div>

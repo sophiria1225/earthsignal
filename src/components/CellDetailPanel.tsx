@@ -317,7 +317,7 @@ export const CellDetailPanel: React.FC<Props> = ({ cell, history = [], onClose, 
               }}
               className="bg-indigo-600 hover:bg-indigo-700 text-white px-4 py-2 rounded-xl text-xs font-semibold shadow-sm transition-colors"
             >
-              この地域で観測を投稿
+              この地域で観測を記録
             </button>
           </div>
         </div>

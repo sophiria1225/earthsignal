@@ -1,6 +1,7 @@
 import React from 'react';
 import { useDialogAccessibility } from '../hooks/useDialogAccessibility';
 import { Earthquake } from '../types';
+import { formatTsunamiStatus } from '../services/externalFeeds';
 import { X, Activity, AlertTriangle, ShieldCheck, MapPin, ExternalLink, Clock } from 'lucide-react';
 
 interface Props {
@@ -74,13 +75,13 @@ export const EarthquakeDetailModal: React.FC<Props> = ({ earthquake, onClose }) 
               <div>
                 <span className="text-slate-400 block text-[10px]">震源の深さ</span>
                 <span className="font-bold text-slate-800 dark:text-slate-200 text-sm">
-                  {earthquake.depthKm !== null ? `約 ${earthquake.depthKm} km` : 'ごく浅い'}
+                  {earthquake.depthKm !== null ? `約 ${earthquake.depthKm} km` : '不明'}
                 </span>
               </div>
               <div>
                 <span className="text-slate-400 block text-[10px]">津波の有無</span>
                 <span className="font-bold text-slate-800 dark:text-slate-200 text-sm">
-                  {earthquake.tsunamiStatus === 'none' ? 'なし' : earthquake.tsunamiStatus}
+                  {formatTsunamiStatus(earthquake.tsunamiStatus)}
                 </span>
               </div>
               <div>

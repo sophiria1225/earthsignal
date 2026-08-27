@@ -1,6 +1,7 @@
 import React from 'react';
 import { Earthquake, GeoCell, Observation, RuntimeDataSourceStatus } from '../types';
 import { ScientificDisclaimer } from './ScientificDisclaimer';
+import { formatTsunamiStatus } from '../services/externalFeeds';
 import { 
   Activity, 
   MapPin, 
@@ -55,6 +56,15 @@ export const HomeDashboard: React.FC<Props> = ({
 }) => {
   const latestEq = recentEarthquakes[0];
   const score = selectedCell.currentScore;
+  const usableCategoryCount = [
+    score.earthquakeActivityScore,
+    score.weatherScore,
+    score.socialScore,
+    score.animalAudioScore,
+    score.otherAudioScore,
+    score.citizenReportScore,
+  ].filter(value => value !== null).length;
+  const scoreAt = Date.parse(score.scoreAt || '');
   const earthquakeStatus = sourceStatuses.find(source => source.key === 'earthquake');
   const socialStatus = sourceStatuses.find(source => source.key === 'social');
   const selectedCellObservations = recentObservations
@@ -98,6 +108,11 @@ export const HomeDashboard: React.FC<Props> = ({
             <span>
               <span className="text-[11px] text-slate-500 block">{source.label}</span>
               <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">{source.detail}</span>
+              {source.fetchedAt && (
+                <span className="text-[10px] text-slate-400 block mt-0.5">
+                  {source.isCurrent ? '現在値' : '前回値'} {new Date(source.fetchedAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}
+                </span>
+              )}
             </span>
             <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${
               source.state === 'live' ? 'bg-emerald-500' : source.state === 'loading' ? 'bg-indigo-500 animate-pulse' : 'bg-amber-500'
@@ -166,13 +181,13 @@ export const HomeDashboard: React.FC<Props> = ({
                     <div>
                       <span className="text-slate-500 dark:text-slate-400 block text-[10px]">震源の深さ</span>
                       <span className="font-semibold text-slate-900 dark:text-slate-200 text-sm">
-                        {latestEq.depthKm !== null ? `約${latestEq.depthKm} km` : 'ごく浅い'}
+                        {latestEq.depthKm !== null ? `約${latestEq.depthKm} km` : '不明'}
                       </span>
                     </div>
                     <div>
                       <span className="text-slate-500 dark:text-slate-400 block text-[10px]">津波の影響</span>
                       <span className="font-semibold text-slate-900 dark:text-slate-200 text-sm">
-                        {latestEq.tsunamiStatus === 'none' ? '津波の心配なし' : latestEq.tsunamiStatus}
+                        {formatTsunamiStatus(latestEq.tsunamiStatus)}
                       </span>
                     </div>
                   </div>
@@ -282,8 +297,11 @@ export const HomeDashboard: React.FC<Props> = ({
                     <span>データ品質指標: {(score.qualityScore * 100).toFixed(0)}%</span>
                   </div>
                   <div className="text-slate-500 text-[11px]">
-                    最大比較標本数: {score.sampleCount} 件
+                    採用カテゴリ: {usableCategoryCount}/6 ・ 最大比較標本数: {score.sampleCount}件
                   </div>
+                  {Number.isFinite(scoreAt) && (
+                    <div className="text-slate-400 text-[10px]">算出: {new Date(scoreAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })} / {score.scoreVersion}</div>
+                  )}
                   <button
                     onClick={() => onOpenExplanationModal(selectedCell)}
                     className="text-xs text-indigo-600 dark:text-indigo-400 hover:underline inline-flex items-center gap-0.5 mt-1"
@@ -354,14 +372,14 @@ export const HomeDashboard: React.FC<Props> = ({
         </div>
       </div>
 
-      {/* 観測記録クイックアクション (3大投稿導線) */}
+      {/* 観測記録クイックアクション */}
       <div>
         <div className="flex items-center justify-between mb-3">
           <h3 className="font-bold text-slate-900 dark:text-white text-base flex items-center gap-2">
             <Mic className="w-5 h-5 text-indigo-600" />
             観測データを記録・研究に協力する
           </h3>
-          <span className="text-xs text-slate-500">※個人情報・会話は自動保護されます</span>
+          <span className="text-xs text-slate-500">端末内保存・個人情報は入力しないでください</span>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
@@ -407,7 +425,7 @@ export const HomeDashboard: React.FC<Props> = ({
                   気になった雲を端末内で解析。元写真・EXIFは保存せず、空占有率と利用者が選んだ雲形だけを記録します。
                 </p>
                 <span className="inline-block text-[11px] font-semibold text-cyan-600 dark:text-cyan-400 pt-1">
-                  写真を投稿する →
+                  写真を記録する →
                 </span>
               </div>
             </div>
@@ -425,7 +443,7 @@ export const HomeDashboard: React.FC<Props> = ({
               </div>
               <div className="space-y-1">
                 <h4 className="font-bold text-slate-900 dark:text-white text-base group-hover:text-emerald-600 dark:group-hover:text-emerald-400 transition-colors">
-                  市民レポートを投稿
+                  市民レポートを記録
                 </h4>
                 <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
                   「動物が急に静かになった」「地鳴りのような低音」「微小な揺れ」などの違和感を構造化記録。

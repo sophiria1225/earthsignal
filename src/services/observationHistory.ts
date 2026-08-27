@@ -127,8 +127,13 @@ export function mergeObservationSnapshots(
     .slice(-MAX_POINTS);
 }
 
-function localDayKey(date: Date): string {
-  return `${date.getFullYear()}-${date.getMonth() + 1}-${date.getDate()}`;
+function japanTimeParts(date: Date): { dayKey: string; hour: number } {
+  // 日本には夏時間がないためUTC+9へずらし、端末設定に依存せずUTC getterで読む。
+  const shifted = new Date(date.getTime() + 9 * 60 * 60_000);
+  return {
+    dayKey: `${shifted.getUTCFullYear()}-${shifted.getUTCMonth() + 1}-${shifted.getUTCDate()}`,
+    hour: shifted.getUTCHours(),
+  };
 }
 
 /**
@@ -141,17 +146,19 @@ export function deriveSocialBaseline(
   history: ObservationSnapshot[],
   now = new Date()
 ): SocialBaselineResult {
-  const currentBand = Math.floor(now.getHours() / 3);
-  const today = localDayKey(now);
+  const currentJapanTime = japanTimeParts(now);
+  const currentBand = Math.floor(currentJapanTime.hour / 3);
+  const today = currentJapanTime.dayKey;
   const byDay = new Map<string, ObservationSnapshot>();
 
   for (const snapshot of history) {
     if (snapshot.cellId !== cellId) continue;
     const capturedAt = new Date(snapshot.capturedAt);
     if (!Number.isFinite(capturedAt.getTime())) continue;
-    if (localDayKey(capturedAt) === today || Math.floor(capturedAt.getHours() / 3) !== currentBand) continue;
+    const capturedJapanTime = japanTimeParts(capturedAt);
+    if (capturedJapanTime.dayKey === today || Math.floor(capturedJapanTime.hour / 3) !== currentBand) continue;
     if (now.getTime() - capturedAt.getTime() > 30 * 24 * 60 * 60_000) continue;
-    const day = localDayKey(capturedAt);
+    const day = capturedJapanTime.dayKey;
     const previous = byDay.get(day);
     if (!previous || Date.parse(previous.capturedAt) < capturedAt.getTime()) byDay.set(day, snapshot);
   }
@@ -183,12 +190,14 @@ export function applySocialBaseline(
     return {
       ...summary,
       anomalyScore: null,
+      baselineSampleCount: baseline.sampleCount,
       notice: `SNS異常度を計算するには同時間帯の別日履歴が7日分必要です（現在 ${baseline.sampleCount}/7日）。`,
     };
   }
   return {
     ...summary,
     anomalyScore: baseline.anomalyScore,
+    baselineSampleCount: baseline.sampleCount,
     notice: `同じ3時間帯の別日${baseline.sampleCount}日分と比較（中央値 ${baseline.median}件、MAD ${baseline.mad}件）。投稿増加は地震発生確率ではありません。`,
   };
 }

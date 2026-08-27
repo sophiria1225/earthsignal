@@ -523,6 +523,7 @@ export function generateCellSocialSummary(
     qualityScore: Math.round(avgQuality * 100) / 100,
     // SNSの平常時履歴は永続DBが整うまで推測値を置かない。
     anomalyScore: null,
+    baselineSampleCount: 0,
     categories,
     sources,
     analysisModes,

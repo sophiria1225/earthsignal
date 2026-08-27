@@ -21,6 +21,17 @@ export interface WeatherFeedResult {
   error?: string;
 }
 
+export function formatTsunamiStatus(status: Earthquake['tsunamiStatus']): string {
+  return {
+    none: '津波の心配なし',
+    checking: '津波の影響を調査中',
+    non_effective: '若干の海面変動の可能性',
+    watch: '津波注意報',
+    warning: '津波警報',
+    major_warning: '大津波警報',
+  }[status];
+}
+
 function median(values: number[]): number {
   if (values.length === 0) return 0;
   const sorted = [...values].sort((a, b) => a - b);
@@ -42,9 +53,9 @@ function medianAndMad(values: number[]): { median: number; mad: number } {
 export function normalizeP2PTimestamp(value: unknown): string | null {
   if (typeof value !== 'string' || !value.trim()) return null;
   const trimmed = value.trim();
-  const jstMatch = trimmed.match(/^(\d{4})\/(\d{2})\/(\d{2})\s+(\d{2}):(\d{2}):(\d{2})$/);
+  const jstMatch = trimmed.match(/^(\d{4})\/(\d{2})\/(\d{2})\s+(\d{2}):(\d{2}):(\d{2})(?:\.(\d{1,3}))?$/);
   const normalized = jstMatch
-    ? `${jstMatch[1]}-${jstMatch[2]}-${jstMatch[3]}T${jstMatch[4]}:${jstMatch[5]}:${jstMatch[6]}+09:00`
+    ? `${jstMatch[1]}-${jstMatch[2]}-${jstMatch[3]}T${jstMatch[4]}:${jstMatch[5]}:${jstMatch[6]}${jstMatch[7] ? `.${jstMatch[7].padEnd(3, '0')}` : ''}+09:00`
     : trimmed;
   const timestamp = Date.parse(normalized);
   return Number.isFinite(timestamp) ? new Date(timestamp).toISOString() : null;
@@ -73,7 +84,7 @@ export async function fetchP2PEarthquakesFromSource(
       throw new Error('Invalid response structure from P2P Earthquake API');
     }
 
-    const earthquakes: Earthquake[] = rawData
+    const normalizedEarthquakes: Earthquake[] = rawData
       .filter((item: any) =>
         item.code === 551
         && item.earthquake
@@ -107,13 +118,14 @@ export async function fetchP2PEarthquakesFromSource(
         }
 
         let tsunami: Earthquake['tsunamiStatus'] = 'none';
-        if (eq.domesticTsunami === 'Warning') tsunami = 'warning';
+        if (eq.domesticTsunami === 'MajorWarning') tsunami = 'major_warning';
+        else if (eq.domesticTsunami === 'Warning') tsunami = 'warning';
         else if (eq.domesticTsunami === 'Watch') tsunami = 'watch';
         else if (eq.domesticTsunami === 'Checking') tsunami = 'checking';
         else if (eq.domesticTsunami === 'NonEffective') tsunami = 'non_effective';
 
         return {
-          id: item.id || `eq_${item._id || Date.now()}`,
+          id: String(item.id || item._id || `eq_${eq.time}_${hyp.latitude}_${hyp.longitude}`),
           occurredAt: normalizeP2PTimestamp(eq.time || item.time)!,
           hypocenterName: hyp.name || '震源地情報取得中',
           latitude: hyp.latitude,
@@ -123,11 +135,23 @@ export async function fetchP2PEarthquakesFromSource(
           maxIntensity: maxIntStr,
           tsunamiStatus: tsunami,
           source: 'p2pquake',
-          sourceEventId: item.id,
+          sourceEventId: item.id !== undefined ? String(item.id) : undefined,
           revision: item.issue?.type === 'Correction' ? 2 : 1,
           updatedAt: normalizeP2PTimestamp(item.created_at || item.time || eq.time) || new Date().toISOString(),
         };
       });
+    // P2Pの文書IDは震源速報・各地震度詳細ごとに異なるため、発生時刻と
+    // 震源座標をイベントキーにし、同じ地震は更新時刻が新しい報だけを残す。
+    const byEventKey = new Map<string, Earthquake>();
+    for (const earthquake of normalizedEarthquakes) {
+      const eventKey = `${earthquake.occurredAt}:${earthquake.latitude.toFixed(3)}:${earthquake.longitude.toFixed(3)}`;
+      const previous = byEventKey.get(eventKey);
+      if (!previous || Date.parse(earthquake.updatedAt) >= Date.parse(previous.updatedAt)) {
+        byEventKey.set(eventKey, earthquake);
+      }
+    }
+    const earthquakes = [...byEventKey.values()]
+      .sort((a, b) => Date.parse(b.occurredAt) - Date.parse(a.occurredAt));
 
     return {
       earthquakes,

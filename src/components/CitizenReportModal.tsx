@@ -94,7 +94,7 @@ export const CitizenReportModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
             </div>
             <div>
               <h3 id="citizen-report-title" className="font-bold text-slate-900 dark:text-white text-base">
-                市民観測レポートの投稿 (第6.7章)
+                市民観測レポートの記録
               </h3>
               <span className="text-xs text-slate-500">
                 観測セル: {cell.name}

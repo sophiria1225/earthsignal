@@ -111,7 +111,7 @@ function createEmptyGeoCell(entry: CellCatalogEntry): GeoCell {
     },
     currentScore: {
       scoreAt: '',
-      scoreVersion: 'score-v3-live-baseline',
+      scoreVersion: 'score-v4-local-24h',
       status: 'insufficient',
       overallScore: null,
       qualityScore: 0,

@@ -163,7 +163,7 @@ export const Header: React.FC<Props> = ({
               className="bg-gradient-to-r from-indigo-600 to-indigo-700 hover:from-indigo-700 hover:to-indigo-800 text-white text-xs sm:text-sm font-medium px-3 sm:px-4 py-2 rounded-xl flex items-center gap-1.5 shadow-sm shadow-indigo-500/20 active:scale-95 transition-all"
             >
               <Mic className="w-4 h-4" />
-              <span className="hidden sm:inline">10秒録音・投稿</span>
+              <span className="hidden sm:inline">10秒録音・記録</span>
               <span className="sm:hidden">記録</span>
             </button>
 

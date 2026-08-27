@@ -3,7 +3,7 @@
  * SPDX-License-Identifier: Apache-2.0
  */
 
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { GeoCell, Earthquake, Observation, RuntimeDataSourceStatus, SocialDerivedPost } from './types';
 import { createRuntimeGeoCells } from './services/dataStore';
 import { fetchP2PEarthquakes, fetchOpenMeteoWeather } from './services/externalFeeds';
@@ -40,6 +40,9 @@ const PostEventVerificationView = React.lazy(() =>
 );
 
 export default function App() {
+  const refreshInFlightRef = useRef(false);
+  const refreshDataRef = useRef<() => Promise<void>>(async () => {});
+  const lastRefreshAtRef = useRef(0);
   const initialCells = React.useMemo(() => createRuntimeGeoCells(), []);
   const [activeTab, setActiveTab] = useState<TabType>('home');
   const [cells, setCells] = useState<GeoCell[]>(initialCells);
@@ -49,6 +52,7 @@ export default function App() {
   const [observationHistory, setObservationHistory] = useState<ObservationSnapshot[]>(loadObservationHistory);
   const [observations, setObservations] = useState<Observation[]>(loadObservations);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
+  const [isOnline, setIsOnline] = useState(() => typeof navigator === 'undefined' || navigator.onLine);
   const [sourceStatuses, setSourceStatuses] = useState<RuntimeDataSourceStatus[]>([
     { key: 'earthquake', label: '地震', state: 'loading', isCurrent: false, recordCount: 0, detail: '取得待ち' },
     { key: 'weather', label: '気象', state: 'loading', isCurrent: false, recordCount: 0, detail: '取得待ち' },
@@ -73,6 +77,20 @@ export default function App() {
     if (!hasAgreed) {
       setShowOnboarding(true);
     }
+  }, []);
+
+  useEffect(() => {
+    const handleOnline = () => {
+      setIsOnline(true);
+      void refreshDataRef.current();
+    };
+    const handleOffline = () => setIsOnline(false);
+    window.addEventListener('online', handleOnline);
+    window.addEventListener('offline', handleOffline);
+    return () => {
+      window.removeEventListener('online', handleOnline);
+      window.removeEventListener('offline', handleOffline);
+    };
   }, []);
 
   const handleCloseOnboarding = () => {
@@ -108,6 +126,8 @@ export default function App() {
 
   // データ更新関数
   const refreshData = async () => {
+    if (refreshInFlightRef.current) return;
+    refreshInFlightRef.current = true;
     setIsRefreshing(true);
     setSourceStatuses(current => current.map(source => ({ ...source, state: 'loading', detail: '更新中', error: undefined })));
     try {
@@ -202,7 +222,8 @@ export default function App() {
             updated,
             observations.filter(observation => observation.cellId === cell.id),
             scoreEarthquakes,
-            socialResult.isLive ? socialSummary.anomalyScore : null
+            socialResult.isLive ? socialSummary.anomalyScore : null,
+            socialResult.isLive ? socialSummary.baselineSampleCount : 0
           );
           return {
             ...updated,
@@ -220,13 +241,33 @@ export default function App() {
         capturedAt
       ));
     } finally {
+      lastRefreshAtRef.current = Date.now();
+      refreshInFlightRef.current = false;
       setIsRefreshing(false);
     }
   };
+  refreshDataRef.current = refreshData;
 
-  // 初回データ読み込み (外部P2P地震 & 気象データ)
+  // 初回取得、5分周期、オンライン復帰・タブ復帰時の再取得。
   useEffect(() => {
-    refreshData();
+    void refreshDataRef.current();
+    const intervalId = window.setInterval(() => {
+      if (navigator.onLine && document.visibilityState === 'visible') {
+        void refreshDataRef.current();
+      }
+    }, 5 * 60_000);
+    const handleVisibilityChange = () => {
+      if (document.visibilityState === 'visible'
+        && navigator.onLine
+        && Date.now() - lastRefreshAtRef.current >= 2 * 60_000) {
+        void refreshDataRef.current();
+      }
+    };
+    document.addEventListener('visibilitychange', handleVisibilityChange);
+    return () => {
+      window.clearInterval(intervalId);
+      document.removeEventListener('visibilitychange', handleVisibilityChange);
+    };
   }, []);
 
   // 選択セルが変更された時の最新状態同期
@@ -250,7 +291,15 @@ export default function App() {
           const currentSocialScore = sourceStatuses.some(source => source.key === 'social' && source.isCurrent)
             ? c.socialSummary?.anomalyScore
             : null;
-          const newScore = calculateRobustAnomalyScore(c, cellObs, currentEarthquakes, currentSocialScore);
+          const newScore = calculateRobustAnomalyScore(
+            c,
+            cellObs,
+            currentEarthquakes,
+            currentSocialScore,
+            currentSocialScore !== null && currentSocialScore !== undefined
+              ? c.socialSummary?.baselineSampleCount || 0
+              : 0
+          );
           return {
             ...c,
             recentObservationsCount: filterCurrentObservations(cellObs).length,
@@ -269,7 +318,7 @@ export default function App() {
       <Header
         activeTab={activeTab}
         onSelectTab={setActiveTab}
-        feedStatus={sourceStatuses.some(source => source.state === 'loading')
+        feedStatus={!isOnline ? 'degraded' : sourceStatuses.some(source => source.state === 'loading')
           ? 'loading'
           : sourceStatuses.every(source => source.state === 'live') ? 'live' : 'degraded'}
         isRefreshing={isRefreshing}
@@ -277,6 +326,12 @@ export default function App() {
         onOpenPrivacy={() => setShowOnboarding(true)}
         onOpenQuickRecord={(type) => setActiveRecordModal(type || 'audio')}
       />
+
+      {!isOnline && (
+        <div role="status" className="bg-amber-50 dark:bg-amber-950/50 border-b border-amber-200 dark:border-amber-900 px-4 py-2 text-center text-xs text-amber-800 dark:text-amber-200">
+          オフラインです。外部データの更新は一時停止していますが、保存済みデータの閲覧と端末内観測は利用できます。
+        </div>
+      )}
 
       {/* メインコンテンツエリア */}
       <main className="flex-1 pb-16">
@@ -349,7 +404,8 @@ export default function App() {
                       cell,
                       observations.filter(observation => observation.cellId === cell.id),
                       currentEarthquakes,
-                      null
+                      null,
+                      0
                     ),
                   })));
                   return;
@@ -370,7 +426,8 @@ export default function App() {
                       { ...cell, socialSummary },
                       observations.filter(observation => observation.cellId === cell.id),
                       currentEarthquakes,
-                      socialSummary.anomalyScore
+                      socialSummary.anomalyScore,
+                      socialSummary.baselineSampleCount
                     ),
                   };
                 });
@@ -427,7 +484,7 @@ export default function App() {
                   元写真・EXIFは保存せず端末内で空占有率を推定。雲形は利用者が選択します。
                 </p>
                 <span className="text-xs font-bold text-cyan-600 dark:text-cyan-400 block pt-2">
-                  写真を投稿する →
+                  写真を記録する →
                 </span>
               </button>
 

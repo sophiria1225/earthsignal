@@ -4,7 +4,7 @@
  * Uses Median, MAD, Robust Z-score, Logistic 0-100 scaling, and Quality Coefficients
  */
 
-import { CellScore, Observation, ScoreContributor } from '../types';
+import { CellScore, Earthquake, Observation, ScoreContributor } from '../types';
 
 export const CURRENT_OBSERVATION_WINDOW_MS = 24 * 60 * 60_000;
 
@@ -111,13 +111,15 @@ export function calculateQualityScore(params: {
 
 /**
  * 14.7 総合観測異常度の計算 (v2.0)
- * 重み: 公式地震 0.30, 気象 0.20, SNS 0.20, ユーザー観測 0.15, 動物音響 0.15
+ * 基準重み: 公式地震 0.25, 気象 0.20, SNS 0.20, 市民観測 0.15,
+ * 動物音響 0.10, その他音響 0.10。欠測カテゴリは除外して再正規化する。
  */
 export function computeCellScore(
   features: FeatureInput[],
   weatherInfo: { windSpeed: number; precipitation: number; minutesSinceUpdate: number },
   uniqueUserCount: number,
-  socialAnomalyScore?: number | null
+  socialAnomalyScore?: number | null,
+  socialBaselineSampleCount = 0
 ): CellScore {
   const isBadWeather = weatherInfo.windSpeed >= 6.0 || weatherInfo.precipitation >= 2.0;
   const confounders: string[] = [];
@@ -143,7 +145,9 @@ export function computeCellScore(
 
   const contributors: ScoreContributor[] = [];
   // 同じ日の気象値を特徴量ごとに重複加算せず、利用したベースラインの最大標本数を示す。
-  let totalSampleCount = 0;
+  let totalSampleCount = socialAnomalyScore !== null && socialAnomalyScore !== undefined
+    ? Math.max(0, socialBaselineSampleCount)
+    : 0;
 
   for (const f of features) {
     totalSampleCount = Math.max(totalSampleCount, f.baseline.sampleCount);
@@ -189,11 +193,12 @@ export function computeCellScore(
 
   // v2.0 14.7 総合重み配分
   const categoryWeights = [
-    { key: 'earthquake', score: eqScore, weight: 0.30 },
+    { key: 'earthquake', score: eqScore, weight: 0.25 },
     { key: 'weather', score: wxScore, weight: 0.20 },
     { key: 'social', score: socialScore, weight: 0.20 },
     { key: 'citizen_report', score: citizenScore, weight: 0.15 },
-    { key: 'animal_audio', score: animalScore, weight: 0.15 },
+    { key: 'animal_audio', score: animalScore, weight: 0.10 },
+    { key: 'other_audio', score: otherAudioScore, weight: 0.10 },
   ];
 
   const usable = categoryWeights.filter(c => c.score !== null);
@@ -236,7 +241,7 @@ export function computeCellScore(
 
   return {
     scoreAt: new Date().toISOString(),
-    scoreVersion: 'score-v3-live-baseline',
+    scoreVersion: 'score-v4-local-24h',
     status,
     overallScore,
     qualityScore: quality,
@@ -259,8 +264,9 @@ export function computeCellScore(
 export function calculateRobustAnomalyScore(
   cell: { id: string; name: string; center: { latitude: number; longitude: number }; weather: any; currentScore: CellScore },
   cellObservations: Observation[],
-  recentEarthquakes: any[],
-  socialAnomalyScore?: number | null
+  recentEarthquakes: Earthquake[],
+  socialAnomalyScore?: number | null,
+  socialBaselineSampleCount = 0
 ): CellScore {
   const weather = cell.weather;
   const features: FeatureInput[] = [];
@@ -335,6 +341,27 @@ export function calculateRobustAnomalyScore(
     });
   }
 
+  const lowSoundAudio = currentObservations.filter(observation => observation.type === 'audio'
+    && observation.audioAnalysis
+    && observation.audioAnalysis.qualityScore >= 0.4
+    && observation.userConfirmation?.differenceFromNormal !== undefined
+    && observation.userConfirmation.confirmedLabels.includes('地鳴りのような低い音')
+    && !observation.userConfirmation.confirmedLabels.some(label => animalLabels.includes(label)));
+  if (lowSoundAudio.length >= 3) {
+    const meanDifference = lowSoundAudio.reduce((sum, observation) =>
+      sum + Number(observation.userConfirmation?.differenceFromNormal || 1), 0) / lowSoundAudio.length;
+    features.push({
+      name: 'confirmed_low_sound_audio',
+      displayName: '利用者確認済み低い環境音の「普段との差」',
+      category: 'other_audio',
+      currentValue: Math.round(meanDifference * 10) / 10,
+      baseline: { median: 1, mad: 0.75, sampleCount: lowSoundAudio.length },
+      weight: 1.0,
+      direction: 'up',
+      unit: '/5',
+    });
+  }
+
   const cloudPhotos = currentObservations.filter(observation => observation.type === 'cloud_photo'
     && observation.cloudAnalysis
     && observation.cloudAnalysis.qualityScore >= 0.5
@@ -394,8 +421,9 @@ export function calculateRobustAnomalyScore(
       precipitation: weather.isStale ? 0 : weather.precipitation || 0,
       minutesSinceUpdate,
     },
-    reports.length + animalAudio.length + cloudPhotos.length,
-    socialAnomalyScore
+    reports.length + animalAudio.length + lowSoundAudio.length + cloudPhotos.length,
+    socialAnomalyScore,
+    socialBaselineSampleCount
   );
 }
 

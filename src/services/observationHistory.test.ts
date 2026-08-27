@@ -62,3 +62,13 @@ test('SNS履歴が7日あれば実測値から異常度を算出する', () => {
   assert.equal(result.median, 2);
   assert.ok(result.anomalyScore !== null && result.anomalyScore > 90);
 });
+
+test('端末タイムゾーンに依存せず日本時間の同時間帯を比較する', () => {
+  const now = new Date('2026-08-28T00:30:00.000Z'); // 日本時間 09:30
+  const history = Array.from({ length: 7 }, (_, index) => ({
+    ...snapshot(index + 1, 2),
+    capturedAt: new Date(now.getTime() - (index + 1) * 24 * 60 * 60_000).toISOString(),
+  }));
+  const result = deriveSocialBaseline('cell_tokyo_01', 8, history, now);
+  assert.equal(result.sampleCount, 7);
+});

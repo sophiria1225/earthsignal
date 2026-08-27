@@ -149,6 +149,7 @@ export interface SocialHourlySummary {
   locationExplicitRatio: number; // 地域明示率
   qualityScore: number; // 平均情報品質 0-1
   anomalyScore: number | null; // 履歴ベースラインがある場合のみ 0 - 100
+  baselineSampleCount: number; // 同時間帯比較に実際に採用した別日数
   categories: Record<SocialCategory, number>;
   sources: Record<SocialSourceType, number>;
   analysisModes: Record<AnalysisMode, number>;
@@ -268,7 +269,7 @@ export interface ScoreContributor {
 
 export interface CellScore {
   scoreAt: string;
-  scoreVersion: string; // "score-v2-robust"
+  scoreVersion: string; // 例: "score-v4-local-24h"
   status: 'available' | 'insufficient' | 'stale';
   overallScore: number | null; // 0 - 100 (null if insufficient)
   qualityScore: number; // 0.0 - 1.0

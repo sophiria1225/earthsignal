@@ -85,6 +85,11 @@ export const ResearchInfoView: React.FC = () => {
               ※ロジスティック変換で外れ値の影響を抑えます。品質Qはスコアとは別に表示し、低品質データを「正常」に見せない設計です。
             </span>
           </div>
+          <div className="p-4 rounded-xl bg-indigo-50/60 dark:bg-indigo-950/20 border border-indigo-200/70 dark:border-indigo-900 text-slate-700 dark:text-slate-300 space-y-1.5">
+            <strong className="text-slate-900 dark:text-white">総合化の基準重み（score-v4-local-24h）</strong>
+            <p>周辺地震25%・気象20%・SNS20%・市民レポート/雲15%・動物音10%・低い環境音10%。欠測カテゴリは除外して残りだけで再正規化し、採用カテゴリ数を画面に表示します。</p>
+            <p>端末観測は直近24時間の確定済みデータだけを対象とし、各自己評価は同一地域で3件以上そろうまで採点しません。SNSは日本時間の同じ3時間帯について別日7日分以上を必要とします。</p>
+          </div>
         </div>
       </div>
 

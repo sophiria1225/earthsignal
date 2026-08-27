@@ -34,6 +34,7 @@ const weatherCache = new Map<string, { expiresAt: number; response: WeatherFeedR
 let earthquakeInFlight: Promise<EarthquakeFeedResult> | null = null;
 const weatherInFlight = new Map<string, Promise<WeatherFeedResult>>();
 let blueskySession: { accessJwt: string; expiresAt: number } | null = null;
+let blueskyAuthFailureUntil = 0;
 const blueskyProfileCache = new Map<string, { expiresAt: number; response: BlueskyPublicProfileResponse }>();
 
 class UpstreamHttpError extends Error {
@@ -61,31 +62,40 @@ async function fetchBlueskyPublicJson(url: URL): Promise<any> {
   throw new Error('Bluesky public API did not respond');
 }
 
-async function getBlueskyAccessToken(): Promise<string | null> {
+async function getBlueskyAccessToken(signal?: AbortSignal): Promise<string | null> {
   const identifier = process.env.BLUESKY_IDENTIFIER?.trim();
   const appPassword = process.env.BLUESKY_APP_PASSWORD?.trim();
   if (!identifier || !appPassword) return null;
   if (blueskySession && blueskySession.expiresAt > Date.now()) return blueskySession.accessJwt;
+  if (blueskyAuthFailureUntil > Date.now()) return null;
 
-  const response = await fetch('https://bsky.social/xrpc/com.atproto.server.createSession', {
-    method: 'POST',
-    headers: {
-      Accept: 'application/json',
-      'Content-Type': 'application/json',
-      'User-Agent': 'EarthSignal/1.0 (public-earth-observation-research)',
-    },
-    body: JSON.stringify({ identifier, password: appPassword }),
-    signal: AbortSignal.timeout(SOCIAL_REQUEST_TIMEOUT_MS),
-  });
-  if (!response.ok) throw new Error(`Bluesky authentication returned ${response.status}`);
-  const session = await response.json() as { accessJwt?: string };
-  if (!session.accessJwt) throw new Error('Bluesky authentication response did not include an access token');
-  blueskySession = {
-    accessJwt: session.accessJwt,
-    // Access JWTの実期限より十分短く更新し、期限切れリクエストを避ける。
-    expiresAt: Date.now() + 45 * 60_000,
-  };
-  return session.accessJwt;
+  try {
+    const response = await fetch('https://bsky.social/xrpc/com.atproto.server.createSession', {
+      method: 'POST',
+      headers: {
+        Accept: 'application/json',
+        'Content-Type': 'application/json',
+        'User-Agent': 'EarthSignal/1.0 (public-earth-observation-research)',
+      },
+      body: JSON.stringify({ identifier, password: appPassword }),
+      signal: signal || AbortSignal.timeout(SOCIAL_REQUEST_TIMEOUT_MS),
+    });
+    if (!response.ok) throw new Error(`Bluesky authentication returned ${response.status}`);
+    const session = await response.json() as { accessJwt?: string };
+    if (!session.accessJwt) throw new Error('Bluesky authentication response did not include an access token');
+    blueskySession = {
+      accessJwt: session.accessJwt,
+      // Access JWTの実期限より十分短く更新し、期限切れリクエストを避ける。
+      expiresAt: Date.now() + 45 * 60_000,
+    };
+    blueskyAuthFailureUntil = 0;
+    return session.accessJwt;
+  } catch (error) {
+    blueskySession = null;
+    blueskyAuthFailureUntil = Date.now() + 5 * 60_000;
+    console.warn('Bluesky authentication unavailable; falling back to public search:', error instanceof Error ? error.message : error);
+    return null;
+  }
 }
 
 function hashSocialIdentifier(value: string): string {
@@ -378,7 +388,8 @@ async function startServer() {
     try {
 
     const blueskyQueries = [
-      '地震雲', '地鳴り', '犬が吠える', '鳥が騒ぐ', '揺れた気がする',
+      '地震雲', '変な雲', '地鳴り', '犬が吠える', '猫が落ち着かない',
+      '鳥が騒ぐ', 'カラスが騒ぐ', '揺れた気がする', '井戸水が濁った',
     ];
     const mastodonTags = ['地震雲', '地鳴り'];
     const mastodonInstances = (process.env.MASTODON_INSTANCES || 'https://mastodon.social,https://mstdn.jp')
@@ -386,6 +397,8 @@ async function startServer() {
       .map(value => value.trim())
       .filter(value => /^https:\/\/[a-z0-9.-]+(?::\d+)?$/i.test(value))
       .slice(0, 3);
+    // 検索語を増やしてもブラウザ側の50秒制限より前に部分結果を返す。
+    const collectionSignal = AbortSignal.timeout(42_000);
 
     type CollectionTask = {
       source: Extract<SocialSourceType, 'bluesky' | 'mastodon'>;
@@ -396,19 +409,32 @@ async function startServer() {
       ...blueskyQueries.map(query => ({
         source: 'bluesky' as const,
         run: async () => {
-          const accessJwt = await getBlueskyAccessToken();
-          return fetchLiveBlueskyPosts(query, {
-            signal: AbortSignal.timeout(SOCIAL_REQUEST_TIMEOUT_MS),
-            throwOnError: true,
-            serviceUrl: accessJwt ? 'https://bsky.social' : 'https://api.bsky.app',
-            accessJwt: accessJwt || undefined,
-          });
+          const requestSignal = AbortSignal.any([collectionSignal, AbortSignal.timeout(SOCIAL_REQUEST_TIMEOUT_MS)]);
+          const accessJwt = await getBlueskyAccessToken(requestSignal);
+          try {
+            return await fetchLiveBlueskyPosts(query, {
+              signal: requestSignal,
+              throwOnError: true,
+              serviceUrl: accessJwt ? 'https://bsky.social' : 'https://api.bsky.app',
+              accessJwt: accessJwt || undefined,
+            });
+          } catch (error) {
+            if (!accessJwt || collectionSignal.aborted) throw error;
+            // 期限切れ・拒否された認証セッションは破棄し、この回だけ公開検索へ戻す。
+            blueskySession = null;
+            blueskyAuthFailureUntil = Date.now() + 5 * 60_000;
+            return fetchLiveBlueskyPosts(query, {
+              signal: AbortSignal.any([collectionSignal, AbortSignal.timeout(SOCIAL_REQUEST_TIMEOUT_MS)]),
+              throwOnError: true,
+              serviceUrl: 'https://api.bsky.app',
+            });
+          }
         },
       })),
       ...mastodonInstances.flatMap(instance => mastodonTags.map(tag => ({
         source: 'mastodon' as const,
         run: () => fetchLiveMastodonPosts(tag, instance, {
-          signal: AbortSignal.timeout(SOCIAL_REQUEST_TIMEOUT_MS),
+          signal: AbortSignal.any([collectionSignal, AbortSignal.timeout(SOCIAL_REQUEST_TIMEOUT_MS)]),
           throwOnError: true,
         }),
       }))),
@@ -517,6 +543,7 @@ async function startServer() {
         '同時間帯気温',
         '市民レポートの「普段との差」自己評価',
         '利用者確認済み動物音の「普段との差」',
+        '利用者確認済み低い環境音の「普段との差」',
         '雲写真の「普段との差」自己評価',
         '周辺250kmの地震情報件数',
       ]);
