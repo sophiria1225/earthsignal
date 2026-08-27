@@ -5,6 +5,7 @@
  */
 
 import { Earthquake, WeatherObservation } from '../types';
+import { fetchWithTimeout } from './http';
 
 export interface EarthquakeFeedResult {
   earthquakes: Earthquake[];
@@ -242,14 +243,14 @@ export async function fetchOpenMeteoWeatherFromSource(
 
 /** ブラウザ用: 同一オリジンのサーバープロキシから取得する。 */
 export async function fetchP2PEarthquakes(limit = 100): Promise<EarthquakeFeedResult> {
-  const response = await fetch(`/api/data/earthquakes?limit=${Math.min(100, Math.max(1, limit))}`);
+  const response = await fetchWithTimeout(`/api/data/earthquakes?limit=${Math.min(100, Math.max(1, limit))}`, {}, 20_000);
   if (!response.ok) throw new Error(`地震情報APIが ${response.status} を返しました`);
   return response.json();
 }
 
 /** ブラウザ用: 座標は送らず、サーバー側の許可済みセルIDだけを指定する。 */
 export async function fetchOpenMeteoWeather(cellId: string): Promise<WeatherFeedResult> {
-  const response = await fetch(`/api/data/weather/${encodeURIComponent(cellId)}`);
+  const response = await fetchWithTimeout(`/api/data/weather/${encodeURIComponent(cellId)}`, {}, 20_000);
   if (!response.ok) throw new Error(`気象情報APIが ${response.status} を返しました`);
   return response.json();
 }

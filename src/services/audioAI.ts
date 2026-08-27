@@ -5,6 +5,7 @@
  */
 
 import { AudioAnalysis, AudioLabel } from '../types';
+import { createLocalId } from './id';
 
 export interface AudioQualityMetrics {
   durationMs: number;
@@ -140,7 +141,7 @@ export function classifyAudioFeatures(
   topLabels.sort((a, b) => b.meanScore - a.meanScore);
 
   return {
-    id: `aud_an_${Date.now()}`,
+    id: createLocalId('aud_an'),
     observationId,
     modelVersion: 'signal-quality-heuristic-v1',
     durationMs: metrics.durationMs,

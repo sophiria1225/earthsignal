@@ -29,6 +29,7 @@ function snapshot(dayOffset: number, socialPostCount: number): ObservationSnapsh
 test('壊れた履歴JSONや別形式を安全に無視する', () => {
   assert.deepEqual(parseObservationHistory('{broken'), []);
   assert.deepEqual(parseObservationHistory(JSON.stringify([{ version: 0 }])), []);
+  assert.deepEqual(parseObservationHistory(JSON.stringify([{ ...snapshot(1, 2), overallScore: 'high' }])), []);
 });
 
 test('同じ地域・時間バケットは最新値へ置き換える', () => {

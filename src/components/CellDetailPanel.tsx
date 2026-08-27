@@ -2,6 +2,7 @@ import React, { useState } from 'react';
 import { GeoCell } from '../types';
 import { ObservationSnapshot } from '../services/observationHistory';
 import { useDialogAccessibility } from '../hooks/useDialogAccessibility';
+import { fetchWithTimeout } from '../services/http';
 import { 
   X, 
   MapPin, 
@@ -45,16 +46,16 @@ export const CellDetailPanel: React.FC<Props> = ({ cell, history = [], onClose, 
   const fetchAiExplanation = async () => {
     setIsLoadingAi(true);
     try {
-      const res = await fetch('/api/ai/explain-anomaly', {
+      const res = await fetchWithTimeout('/api/ai/explain-anomaly', {
         method: 'POST',
         headers: { 'Content-Type': 'application/json' },
         body: JSON.stringify({
-          cellName: cell.name,
+          cellId: cell.id,
           score: score.overallScore,
           contributors: score.contributors,
           confounders: score.confounders,
         }),
-      });
+      }, 20_000);
       if (res.ok) {
         const data = await res.json();
         setAiExplanation(data.explanation);
@@ -86,7 +87,7 @@ export const CellDetailPanel: React.FC<Props> = ({ cell, history = [], onClose, 
                 <span className="text-xs text-slate-500">({cell.prefecture})</span>
               </div>
               <span className="text-xs text-slate-500">
-                地域セルID: {cell.id} / 比較標本数: {score.sampleCount} 件
+                地域セルID: {cell.id} / 最大比較標本数: {score.sampleCount} 件
               </span>
             </div>
           </div>

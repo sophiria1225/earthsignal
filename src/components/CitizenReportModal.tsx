@@ -1,5 +1,6 @@
 import React, { useState } from 'react';
 import { useDialogAccessibility } from '../hooks/useDialogAccessibility';
+import { createLocalId } from '../services/id';
 import { GeoCell, Observation, CitizenReportData } from '../types';
 import { 
   X, 
@@ -30,7 +31,6 @@ export const CitizenReportModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
   const [differenceFromNormal, setDifferenceFromNormal] = useState(3);
   const [durationMinutes, setDurationMinutes] = useState(15);
   const [description, setDescription] = useState('');
-  const [visibility, setVisibility] = useState<'aggregate_only' | 'anonymous_public'>('aggregate_only');
   const [isCompleted, setIsCompleted] = useState(false);
 
   const categories: { key: CitizenReportData['category']; label: string; desc: string }[] = [
@@ -39,7 +39,7 @@ export const CitizenReportModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
     { key: 'bird_flock', label: '鳥の群れ・飛び方が普段と違う', desc: 'カラス等の集団飛来や方向の偏り' },
     { key: 'cloud_shape', label: '雲の形・空の様子が気になった', desc: '帯状・波状等の特異な雲模様' },
     { key: 'low_rumble_sound', label: '地鳴り・低い音のように感じた', desc: '耳鳴りや遠くの重低音のような感覚' },
-    { key: 'micro_tremor', label: '微弱な揺れ・振動を感じた', desc: '地震計検知未満の感覚的微小振動' },
+    { key: 'micro_tremor', label: '微弱な揺れ・振動を感じた', desc: '体感した小さな振動（原因は断定しません）' },
     { key: 'electronic_anomaly', label: '電子機器や通信の異常', desc: 'ラジオのノイズやGPS精度の乱れ' },
     { key: 'other', label: 'その他の違和感・観測', desc: '海水・井戸水・植物等の変化' },
   ];
@@ -56,7 +56,7 @@ export const CitizenReportModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
     };
 
     const newObservation: Observation = {
-      id: `obs_rep_${Date.now()}`,
+      id: createLocalId('obs_rep'),
       type: 'citizen_report',
       observedAt: new Date().toISOString(),
       cellId: cell.id,
@@ -65,7 +65,7 @@ export const CitizenReportModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
         latitude: cell.center.latitude,
         longitude: cell.center.longitude,
       },
-      visibility,
+      visibility: 'private',
       status: 'finalized',
       createdAt: new Date().toISOString(),
       citizenReport: reportData,
@@ -224,48 +224,25 @@ export const CitizenReportModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
               </span>
             </div>
 
-            {/* 公開範囲 */}
-            <div className="space-y-1">
-              <label className="block font-bold text-slate-900 dark:text-white">公開範囲:</label>
-              <div className="flex gap-4">
-                <label className="flex items-center gap-1.5 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="visibility"
-                    checked={visibility === 'aggregate_only'}
-                    onChange={() => setVisibility('aggregate_only')}
-                    className="accent-emerald-600"
-                  />
-                  <span>匿名統計集計のみ (推奨)</span>
-                </label>
-                <label className="flex items-center gap-1.5 cursor-pointer">
-                  <input
-                    type="radio"
-                    name="visibility"
-                    checked={visibility === 'anonymous_public'}
-                    onChange={() => setVisibility('anonymous_public')}
-                    className="accent-emerald-600"
-                  />
-                  <span>匿名タイムラインに公開</span>
-                </label>
-              </div>
+            <div className="p-3 rounded-xl bg-emerald-50 dark:bg-emerald-950/30 border border-emerald-200 dark:border-emerald-900 text-emerald-800 dark:text-emerald-300">
+              現在の市民レポートはこのブラウザ内だけに保存され、外部サーバーや公開タイムラインには送信されません。
             </div>
 
             <button
               type="submit"
               className="w-full bg-emerald-600 hover:bg-emerald-700 text-white font-bold py-3 rounded-xl shadow-md transition-all text-xs sm:text-sm"
             >
-              市民レポートを確定・送信
+              この端末にレポートを保存
             </button>
           </form>
         ) : (
           <div className="p-8 text-center space-y-3">
             <CheckCircle className="w-12 h-12 text-emerald-500 mx-auto animate-bounce" />
             <h4 className="font-bold text-slate-900 dark:text-white text-base">
-              市民レポートの送信が完了しました
+              市民レポートをこの端末に保存しました
             </h4>
             <p className="text-xs text-slate-500">
-              平常時との差の統計スコアおよび事後検証データとして活用されます。
+              このブラウザ内の観測比較に使われます。外部には送信していません。
             </p>
           </div>
         )}

@@ -2,6 +2,7 @@ import React, { useState, useRef, useEffect } from 'react';
 import { useDialogAccessibility } from '../hooks/useDialogAccessibility';
 import { GeoCell, Observation, AudioAnalysis } from '../types';
 import { analyzeAudioBuffer, classifyAudioFeatures } from '../services/audioAI';
+import { createLocalId } from '../services/id';
 import { 
   X, 
   Mic, 
@@ -31,8 +32,8 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
   const [audioLevel, setAudioLevel] = useState(0);
   const [analysisResult, setAnalysisResult] = useState<AudioAnalysis | null>(null);
   const [selectedLabels, setSelectedLabels] = useState<string[]>([]);
+  const [differenceFromNormal, setDifferenceFromNormal] = useState(3);
   const [userComment, setUserComment] = useState('');
-  const [visibility, setVisibility] = useState<'aggregate_only' | 'anonymous_public'>('aggregate_only');
   const [analysisError, setAnalysisError] = useState<string | null>(null);
 
   const mediaRecorderRef = useRef<MediaRecorder | null>(null);
@@ -78,15 +79,10 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
           const decodedBuffer = await audioCtx.decodeAudioData(arrayBuffer);
           const metrics = analyzeAudioBuffer(decodedBuffer);
           
-          const obsId = `obs_aud_${Date.now()}`;
+          const obsId = createLocalId('obs_aud');
           const analysis = classifyAudioFeatures(metrics, obsId);
           setAnalysisResult(analysis);
           setSelectedLabels([]);
-
-          // 会話比率が高い場合はプライバシー保護のため匿名集計のみに強制
-          if (analysis.speechRatio > 0.15) {
-            setVisibility('aggregate_only');
-          }
 
           setRecordingState('confirming');
           audioChunksRef.current = [];
@@ -97,6 +93,7 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
           setAnalysisResult(null);
           setAnalysisError('このブラウザでは録音データを解析できませんでした。別のブラウザで再度お試しください。');
           setRecordingState('idle');
+          if (audioCtx.state !== 'closed') await audioCtx.close();
         }
       };
 
@@ -127,8 +124,15 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
       };
       updateLevel();
 
-    } catch (err: any) {
-      alert(`マイクへのアクセスが許可されていません: ${err.message}`);
+    } catch (err: unknown) {
+      streamRef.current?.getTracks().forEach(track => track.stop());
+      if (audioContextRef.current && audioContextRef.current.state !== 'closed') {
+        void audioContextRef.current.close();
+      }
+      const name = err instanceof DOMException ? err.name : '';
+      setAnalysisError(name === 'NotAllowedError'
+        ? 'マイク利用が許可されていません。ブラウザのサイト設定からマイクを許可してください。'
+        : 'マイクを開始できませんでした。この端末・ブラウザが録音に対応しているか確認してください。');
     }
   };
 
@@ -150,6 +154,12 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
     return () => {
       if (timerIntervalRef.current) clearInterval(timerIntervalRef.current);
       if (animationFrameRef.current) cancelAnimationFrame(animationFrameRef.current);
+      if (mediaRecorderRef.current?.state === 'recording') {
+        mediaRecorderRef.current.ondataavailable = null;
+        mediaRecorderRef.current.onstop = null;
+        mediaRecorderRef.current.stop();
+      }
+      audioChunksRef.current = [];
       if (streamRef.current) {
         streamRef.current.getTracks().forEach((track) => track.stop());
       }
@@ -173,13 +183,14 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
         latitude: cell.center.latitude,
         longitude: cell.center.longitude,
       },
-      visibility,
+      visibility: 'private',
       status: 'finalized',
       createdAt: new Date().toISOString(),
       audioAnalysis: analysisResult,
       userConfirmation: {
         confirmedLabels: selectedLabels,
         aiResultCorrect: 'unknown',
+        differenceFromNormal,
         userNotes: userComment,
       },
     };
@@ -252,7 +263,7 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
                 </div>
                 <ul className="list-disc list-inside text-[11px] text-slate-500 dark:text-slate-400 space-y-1">
                   <li><strong>生音声はサーバーへ送信・保存せず</strong>、端末内解析後にアプリから参照を破棄します。</li>
-                  <li>会話比率が高い音声は公衆公開を自動ブロックし、匿名集計のみに限定されます。</li>
+                  <li>保存されるのは信号品質指標と、利用者が確認したラベルだけです。現在は外部公開しません。</li>
                   <li>精密座標は保存せず、選択した代表地域セルの中心座標だけを記録します。</li>
                 </ul>
               </div>
@@ -369,7 +380,7 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
                 {analysisResult.speechRatio > 0.15 && (
                   <div className="p-2.5 rounded-lg bg-amber-500/10 border border-amber-500/30 text-amber-900 dark:text-amber-200 text-xs flex items-center gap-2">
                     <AlertTriangle className="w-4 h-4 text-amber-600 shrink-0" />
-                    <span>会話成分が検知されたため、プライバシー保護として<strong>公衆公開は自動無効化（匿名集計のみ）</strong>されます。</span>
+                    <span>会話らしい周波数成分が多いため、ラベルやメモに個人情報を含めないよう確認してください。生音声自体は保存されません。</span>
                   </div>
                 )}
               </div>
@@ -389,10 +400,13 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
                         onClick={() => {
                           if (isSelected) {
                             setSelectedLabels(selectedLabels.filter((l) => l !== label));
+                          } else if (label === '特に聞こえなかった') {
+                            setSelectedLabels([label]);
                           } else {
-                            setSelectedLabels([...selectedLabels, label]);
+                            setSelectedLabels([...selectedLabels.filter(item => item !== '特に聞こえなかった'), label]);
                           }
                         }}
+                        aria-pressed={isSelected}
                         className={`text-xs px-3 py-1.5 rounded-lg border transition-all ${
                           isSelected
                             ? 'bg-indigo-600 text-white border-indigo-600 font-semibold'
@@ -406,6 +420,23 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
                 </div>
               </div>
 
+              <div className="space-y-1.5 bg-slate-50 dark:bg-slate-900/60 p-3 rounded-xl border border-slate-200 dark:border-slate-800">
+                <div className="flex items-center justify-between text-xs font-bold text-slate-800 dark:text-slate-200">
+                  <label htmlFor="audio-difference">普段の同じ場所・時間帯との違い</label>
+                  <span className="text-indigo-600 dark:text-indigo-400">Lv {differenceFromNormal} / 5</span>
+                </div>
+                <input
+                  id="audio-difference"
+                  type="range"
+                  min={1}
+                  max={5}
+                  value={differenceFromNormal}
+                  onChange={(event) => setDifferenceFromNormal(Number(event.target.value))}
+                  className="w-full accent-indigo-600"
+                />
+                <div className="flex justify-between text-[10px] text-slate-400"><span>普段とほぼ同じ</span><span>極めて珍しい</span></div>
+              </div>
+
               {/* 任意メモ */}
               <div>
                 <label className="block text-xs font-medium text-slate-600 dark:text-slate-400 mb-1">
@@ -415,9 +446,11 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
                   type="text"
                   value={userComment}
                   onChange={(e) => setUserComment(e.target.value)}
+                  maxLength={500}
                   placeholder="例: 近所の犬が遠吠えしていた 等"
                   className="w-full text-xs p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 focus:ring-2 focus:ring-indigo-500 outline-none"
                 />
+                <span className="text-[10px] text-slate-400 block mt-1 text-right">{userComment.length}/500文字</span>
               </div>
 
               {/* 生音声破棄通知 */}
@@ -438,7 +471,7 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
                   disabled={selectedLabels.length === 0}
                   className="w-2/3 bg-indigo-600 hover:bg-indigo-700 disabled:opacity-50 disabled:cursor-not-allowed text-white py-2.5 rounded-xl text-xs font-bold shadow-md shadow-indigo-500/20"
                 >
-                  観測を確定・送信
+                  この端末に観測を保存
                 </button>
               </div>
             </div>
@@ -449,10 +482,10 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
             <div className="py-8 text-center space-y-3">
               <CheckCircle className="w-12 h-12 text-emerald-500 mx-auto animate-bounce" />
               <h4 className="font-bold text-slate-900 dark:text-white text-base">
-                観測データの送信が完了しました
+                観測データをこの端末に保存しました
               </h4>
               <p className="text-xs text-slate-500">
-                地域セルの観測異常度統計に反映されます。ご協力ありがとうございました。
+                このブラウザ内の地域観測に反映されます。外部サーバーや公開タイムラインには送信していません。
               </p>
             </div>
           )}

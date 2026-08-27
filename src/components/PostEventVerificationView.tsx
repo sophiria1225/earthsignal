@@ -28,7 +28,7 @@ import {
 } from 'recharts';
 
 export const PostEventVerificationView: React.FC = () => {
-  const [evaluations, setEvaluations] = useState<PostEventEvaluation[]>(POST_EVENT_EVALUATIONS);
+  const evaluations: PostEventEvaluation[] = POST_EVENT_EVALUATIONS;
   const [selectedEvalId, setSelectedEvalId] = useState<string>(POST_EVENT_EVALUATIONS[0].id);
 
   const currentEval = evaluations.find((e) => e.id === selectedEvalId) || evaluations[0];
@@ -86,10 +86,12 @@ export const PostEventVerificationView: React.FC = () => {
               const isSelected = ev.id === currentEval.id;
               const isFalsePositive = ev.id.includes('false_positive');
               return (
-                <div
+                <button
+                  type="button"
                   key={ev.id}
                   onClick={() => setSelectedEvalId(ev.id)}
-                  className={`p-4 rounded-2xl border cursor-pointer transition-all space-y-2 ${
+                  aria-pressed={isSelected}
+                  className={`w-full p-4 rounded-2xl border cursor-pointer transition-all space-y-2 text-left ${
                     isSelected
                       ? 'bg-purple-50/70 dark:bg-purple-950/30 border-purple-500 text-purple-950 dark:text-purple-100 shadow-sm'
                       : 'bg-white dark:bg-slate-800 border-slate-200 dark:border-slate-700 hover:bg-slate-50'
@@ -116,7 +118,7 @@ export const PostEventVerificationView: React.FC = () => {
                     <span>{ev.cellName}</span>
                     <span>震央距離 約{ev.distanceFromEpicenterKm}km</span>
                   </div>
-                </div>
+                </button>
               );
             })}
           </div>

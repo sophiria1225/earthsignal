@@ -5,6 +5,7 @@
  */
 
 import { CloudAnalysis } from '../types';
+import { createLocalId } from './id';
 
 export interface ImageAnalysisResult {
   skyCoverageRatio: number;
@@ -24,6 +25,7 @@ export async function analyzeCloudImage(
 ): Promise<CloudAnalysis> {
   // 画像は端末内でピクセルへ展開し、元ファイルやメタデータを保存・送信しない。
   const imageBitmap = await createImageBitmap(file);
+  try {
   const canvas = document.createElement('canvas');
   const maxDimension = 512;
   let width = imageBitmap.width;
@@ -111,10 +113,8 @@ export async function analyzeCloudImage(
     });
   }
 
-  imageBitmap.close();
-
   return {
-    id: `cld_an_${Date.now()}`,
+    id: createLocalId('cld_an'),
     observationId,
     modelVersion: 'pixel-color-heuristic-v1',
     skyCoverageRatio: Math.round(skyCoverageRatio * 100) / 100,
@@ -124,4 +124,7 @@ export async function analyzeCloudImage(
     captureDirection: captureDirection || '不明',
     captureElevationAngle: captureElevationAngle || 45,
   };
+  } finally {
+    imageBitmap.close();
+  }
 }

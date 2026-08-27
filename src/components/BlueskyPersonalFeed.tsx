@@ -1,7 +1,8 @@
 import React, { FormEvent, useState } from 'react';
 import { AlertCircle, AtSign, ExternalLink, Loader2, Search, ShieldCheck, UserRound } from 'lucide-react';
 import { BlueskyPublicProfileResponse, SocialCategory } from '../types';
-import { normalizeBlueskyActor } from '../services/snsCollector';
+import { extractBlueskyActorInput } from '../services/snsCollector';
+import { fetchWithTimeout } from '../services/http';
 
 const CATEGORY_LABELS: Record<SocialCategory, string> = {
   cloud: '雲・空',
@@ -23,9 +24,9 @@ export const BlueskyPersonalFeed: React.FC = () => {
 
   const handleSubmit = async (event: FormEvent) => {
     event.preventDefault();
-    const actor = normalizeBlueskyActor(input);
+    const actor = extractBlueskyActorInput(input);
     if (!actor) {
-      setError('例: example.bsky.social の形式で入力してください。');
+      setError('例: example.bsky.social または bsky.app のプロフィールURLを入力してください。');
       setResult(null);
       return;
     }
@@ -33,9 +34,9 @@ export const BlueskyPersonalFeed: React.FC = () => {
     setIsLoading(true);
     setError(null);
     try {
-      const response = await fetch(`/api/social/bluesky/profile/${encodeURIComponent(actor)}`, {
+      const response = await fetchWithTimeout(`/api/social/bluesky/profile/${encodeURIComponent(actor)}`, {
         headers: { Accept: 'application/json' },
-      });
+      }, 20_000);
       const payload = await response.json().catch(() => ({})) as Partial<BlueskyPublicProfileResponse> & { error?: string };
       if (!response.ok || !payload.profile || !Array.isArray(payload.relevantPosts)) {
         throw new Error(payload.error || `Bluesky APIから取得できませんでした (${response.status})`);
@@ -73,7 +74,7 @@ export const BlueskyPersonalFeed: React.FC = () => {
               type="text"
               value={input}
               onChange={(event) => setInput(event.target.value)}
-              placeholder="example.bsky.social"
+              placeholder="example.bsky.social またはプロフィールURL"
               autoCapitalize="none"
               autoCorrect="off"
               spellCheck={false}
@@ -92,7 +93,7 @@ export const BlueskyPersonalFeed: React.FC = () => {
         </form>
         <p className="mt-2 text-[11px] text-slate-500 flex items-center gap-1.5">
           <ShieldCheck className="w-3.5 h-3.5 text-emerald-500" />
-          入力値・投稿本文は端末履歴に保存しません。サーバーキャッシュは5分で失効します。
+          入力値・投稿本文は端末履歴や地域集計に追加しません。サーバーキャッシュは5分で失効します。
         </p>
       </div>
 

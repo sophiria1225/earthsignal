@@ -5,6 +5,7 @@
  */
 
 import { SocialCategory, SocialDerivedPost, SocialFetchResponse, SocialHourlySummary, SocialSourceType, AnalysisMode } from '../types';
+import { fetchWithTimeout } from './http';
 
 // 7.3 検索語辞書
 export const KEYWORD_DICTIONARY: Record<SocialCategory, string[]> = {
@@ -23,6 +24,7 @@ export const KEYWORD_DICTIONARY: Record<SocialCategory, string[]> = {
 const NEGATION_REGEX = /(ない|無い|なかった|ではない|違う|デマ|無関係|根拠.{0,5}(ない|無い)|迷信|嘘|勘違い|嘘っぽい)/i;
 const HISTORICAL_REGEX = /(昔|先日|数日前|この前|去年|昨年|\d+[日週ヶか月年]前|過去|思い出|東日本大震災の時|あの時)/i;
 const QUOTATION_REGEX = /(ニュース|記事|引用|リポスト|RT|転載|報道|まとめ)/i;
+const DIRECT_OBSERVATION_REGEX = /(見た|見える|聞こえ|感じた|している|なっている|今|現在|さっき|目の前)/i;
 const METAPHOR_CONTEXT_REGEX = /(ゲーム|漫画|アニメ|小説|映画|ライブ|コンサート|スタジアム|歓声|観客|喘ぎ|創作|二次創作)/i;
 const KNOWN_SOUND_SOURCE_REGEX = /(雷|落雷|花火|工事|解体|発破|飛行機|戦闘機|ヘリ|電車|列車|トラック|自衛隊|スピーカー|掃除機|洗濯機)/i;
 
@@ -89,9 +91,28 @@ export function normalizeSocialText(input: string): string {
  */
 export function normalizeBlueskyActor(input: string): string | null {
   const actor = input.trim().replace(/^@/, '').toLowerCase();
-  return /^(?:did:plc:[a-z2-7]{20,64}|[a-z0-9](?:[a-z0-9.-]{1,251}[a-z0-9])?)$/.test(actor)
+  if (/^did:plc:[a-z2-7]{20,64}$/.test(actor)) return actor;
+  if (actor.length > 253 || !actor.includes('.')) return null;
+  const labels = actor.split('.');
+  return labels.every(label => /^[a-z0-9](?:[a-z0-9-]{0,61}[a-z0-9])?$/.test(label))
     ? actor
     : null;
+}
+
+/** UI入力では公式プロフィールURLも受け付け、actor部分だけへ変換する。 */
+export function extractBlueskyActorInput(input: string): string | null {
+  const trimmed = input.trim();
+  if (/^https?:\/\//i.test(trimmed)) {
+    try {
+      const url = new URL(trimmed);
+      if (url.protocol !== 'https:' || url.hostname !== 'bsky.app') return null;
+      const match = url.pathname.match(/^\/profile\/([^/]+)\/?$/);
+      return match ? normalizeBlueskyActor(decodeURIComponent(match[1])) : null;
+    } catch {
+      return null;
+    }
+  }
+  return normalizeBlueskyActor(trimmed);
 }
 
 /**
@@ -115,6 +136,7 @@ export function classifyTextByRules(text: string): {
   const isHistorical = HISTORICAL_REGEX.test(norm);
   const isNegated = NEGATION_REGEX.test(norm);
   const isMetaphorical = METAPHOR_CONTEXT_REGEX.test(norm);
+  const isIndirectQuotation = QUOTATION_REGEX.test(norm) && !DIRECT_OBSERVATION_REGEX.test(norm);
 
   // 3. カテゴリマッチング
   for (const cat of ['cloud', 'animal', 'sound', 'shaking', 'water', 'device'] as SocialCategory[]) {
@@ -122,7 +144,7 @@ export function classifyTextByRules(text: string): {
     const matched = keywords.some(k => norm.includes(k));
     if (matched) {
       const hasKnownCause = (cat === 'sound' || cat === 'shaking') && KNOWN_SOUND_SOURCE_REGEX.test(norm);
-      if (isHistorical || isNegated || isMetaphorical || hasKnownCause) {
+      if (isHistorical || isNegated || isMetaphorical || isIndirectQuotation || hasKnownCause) {
         return { category: 'unrelated', confidence: 0.85, isNegated, isHistorical, isOfficialReaction: false };
       }
       return { category: cat, confidence: 0.85, isNegated: false, isHistorical: false, isOfficialReaction: false };
@@ -181,6 +203,11 @@ export function mastodonHtmlToText(value: string): string {
     .replace(/<br\s*\/?>/gi, '\n')
     .replace(/<\/p>/gi, '\n')
     .replace(/<[^>]*>/g, ' ')));
+}
+
+export function hasSensitiveBlueskyLabel(post: any): boolean {
+  return Array.isArray(post?.labels) && post.labels.some((label: any) =>
+    ['porn', 'sexual', 'nudity', 'graphic-media'].includes(String(label?.val || '').toLowerCase()));
 }
 
 /**
@@ -273,7 +300,7 @@ export async function fetchLiveBlueskyPosts(
     const data = await res.json();
     const posts = data.posts || [];
 
-    return posts.map((p: any) => {
+    return posts.filter((p: any) => !hasSensitiveBlueskyLabel(p)).map((p: any) => {
       const text = p.record?.text || '';
       const { category, isNegated, isHistorical, isOfficialReaction } = classifyTextByRules(text);
       const loc = extractLocationFromText(text);
@@ -344,7 +371,7 @@ export async function fetchLiveMastodonPosts(
     const posts = await res.json();
     if (!Array.isArray(posts)) return [];
 
-    return posts.map((p: any) => {
+    return posts.filter((p: any) => !(p.reblog || p)?.sensitive).map((p: any) => {
       const status = p.reblog || p;
       const text = mastodonHtmlToText(`${status.spoiler_text || ''} ${status.content || ''}`);
       const { category, isOfficialReaction } = classifyTextByRules(text);
@@ -410,7 +437,7 @@ export function fetchLiveSocialPosts(): Promise<SocialFetchResponse> {
   if (liveSocialRequest) return liveSocialRequest;
 
   liveSocialRequest = (async () => {
-    const res = await fetch('/api/social/posts', { headers: { Accept: 'application/json' } });
+    const res = await fetchWithTimeout('/api/social/posts', { headers: { Accept: 'application/json' } }, 50_000);
     if (!res.ok) {
       let detail = '';
       try {

@@ -7,7 +7,7 @@ import React, { useState, useEffect } from 'react';
 import { GeoCell, Earthquake, Observation, RuntimeDataSourceStatus, SocialDerivedPost } from './types';
 import { createRuntimeGeoCells } from './services/dataStore';
 import { fetchP2PEarthquakes, fetchOpenMeteoWeather } from './services/externalFeeds';
-import { calculateRobustAnomalyScore } from './services/anomalyEngine';
+import { calculateRobustAnomalyScore, filterCurrentObservations } from './services/anomalyEngine';
 import { fetchLiveSocialPosts, generateCellSocialSummary } from './services/snsCollector';
 import {
   ObservationSnapshot,
@@ -31,6 +31,7 @@ import { SocialObservationView } from './components/SocialObservationView';
 import { FreeTierStatusView } from './components/FreeTierStatusView';
 import { OnboardingModal } from './components/OnboardingModal';
 import { LocalDataManager } from './components/LocalDataManager';
+import { loadObservations, saveObservations } from './services/observationStore';
 
 const PostEventVerificationView = React.lazy(() =>
   import('./components/PostEventVerificationView').then(module => ({
@@ -46,20 +47,14 @@ export default function App() {
   const [earthquakes, setEarthquakes] = useState<Earthquake[]>([]);
   const [socialPosts, setSocialPosts] = useState<SocialDerivedPost[]>([]);
   const [observationHistory, setObservationHistory] = useState<ObservationSnapshot[]>(loadObservationHistory);
-  const [observations, setObservations] = useState<Observation[]>(() => {
-    try {
-      const stored = JSON.parse(localStorage.getItem('earthsignal_observations_v1') || '[]');
-      return Array.isArray(stored) ? stored.slice(0, 200) : [];
-    } catch {
-      return [];
-    }
-  });
+  const [observations, setObservations] = useState<Observation[]>(loadObservations);
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
   const [sourceStatuses, setSourceStatuses] = useState<RuntimeDataSourceStatus[]>([
-    { key: 'earthquake', label: '地震', state: 'loading', recordCount: 0, detail: '取得待ち' },
-    { key: 'weather', label: '気象', state: 'loading', recordCount: 0, detail: '取得待ち' },
-    { key: 'social', label: 'SNS', state: 'loading', recordCount: 0, detail: '取得待ち' },
+    { key: 'earthquake', label: '地震', state: 'loading', isCurrent: false, recordCount: 0, detail: '取得待ち' },
+    { key: 'weather', label: '気象', state: 'loading', isCurrent: false, recordCount: 0, detail: '取得待ち' },
+    { key: 'social', label: 'SNS', state: 'loading', isCurrent: false, recordCount: 0, detail: '取得待ち' },
   ]);
+  const [storageWarning, setStorageWarning] = useState<string | null>(null);
   const [showOnboarding, setShowOnboarding] = useState<boolean>(false);
 
   // モーダル管理
@@ -90,15 +85,15 @@ export default function App() {
   };
 
   useEffect(() => {
-    try {
-      localStorage.setItem('earthsignal_observations_v1', JSON.stringify(observations.slice(0, 200)));
-    } catch {
-      // 保存容量不足でも現在セッションの観測は保持する。
+    if (!saveObservations(observations) && observations.length > 0) {
+      setStorageWarning('市民観測をブラウザへ保存できません。ページを閉じる前にJSONバックアップを作成してください。');
     }
   }, [observations]);
 
   useEffect(() => {
-    saveObservationHistory(observationHistory);
+    if (!saveObservationHistory(observationHistory) && observationHistory.length > 0) {
+      setStorageWarning('観測履歴をブラウザへ保存できません。ページを閉じる前にJSONバックアップを作成してください。');
+    }
   }, [observationHistory]);
 
   // セル配列更新後も、選択中セルが古いオブジェクトを参照しないよう同期する。
@@ -149,6 +144,7 @@ export default function App() {
       const freshSocialPosts = socialResult.isLive || socialResult.posts.length > 0
         ? socialResult.posts
         : socialPosts;
+      const scoreEarthquakes = earthquakeResult.isLive ? freshEarthquakes : [];
       const capturedAt = new Date();
       setEarthquakes(freshEarthquakes);
       setSocialPosts(freshSocialPosts);
@@ -159,6 +155,7 @@ export default function App() {
           key: 'earthquake',
           label: '地震',
           state: earthquakeResult.isLive ? 'live' : 'degraded',
+          isCurrent: earthquakeResult.isLive,
           fetchedAt: earthquakeResult.fetchedAt,
           recordCount: freshEarthquakes.length,
           detail: earthquakeResult.isLive ? `P2P地震情報 ${freshEarthquakes.length}件` : '取得停止中',
@@ -168,6 +165,7 @@ export default function App() {
           key: 'weather',
           label: '気象',
           state: liveWeatherCount === cells.length ? 'live' : 'degraded',
+          isCurrent: liveWeatherCount > 0,
           fetchedAt: weatherResults.find(result => result.isLive)?.fetchedAt,
           recordCount: liveWeatherCount,
           detail: `Open-Meteo ${liveWeatherCount}/${cells.length}地域`,
@@ -177,6 +175,7 @@ export default function App() {
           key: 'social',
           label: 'SNS',
           state: socialResult.isLive && socialFailures.length === 0 ? 'live' : 'degraded',
+          isCurrent: socialResult.isLive,
           fetchedAt: socialResult.fetchedAt,
           recordCount: freshSocialPosts.length,
           detail: socialResult.isLive
@@ -188,22 +187,29 @@ export default function App() {
 
       const updatedCells = cells.map((cell, index) => {
           const weatherResult = weatherResults[index];
-          const weather = weatherResult?.weather || { ...cell.weather, isStale: true };
+          const weather = weatherResult?.weather
+            ? { ...weatherResult.weather, isStale: !weatherResult.isLive }
+            : { ...cell.weather, isStale: true };
           const rawSocialSummary = generateCellSocialSummary(cell.id, freshSocialPosts, '6h');
-          const socialSummary = applySocialBaseline(
-            rawSocialSummary,
-            deriveSocialBaseline(cell.id, rawSocialSummary.totalPosts, observationHistory, capturedAt)
-          );
+          const socialSummary = socialResult.isLive
+            ? applySocialBaseline(
+                rawSocialSummary,
+                deriveSocialBaseline(cell.id, rawSocialSummary.totalPosts, observationHistory, capturedAt)
+              )
+            : cell.socialSummary || rawSocialSummary;
           const updated = { ...cell, weather, socialSummary };
           const currentScore = calculateRobustAnomalyScore(
             updated,
             observations.filter(observation => observation.cellId === cell.id),
-            freshEarthquakes,
-            socialSummary.anomalyScore
+            scoreEarthquakes,
+            socialResult.isLive ? socialSummary.anomalyScore : null
           );
           return {
             ...updated,
-            recentObservationsCount: observations.filter(observation => observation.cellId === cell.id).length,
+            recentObservationsCount: filterCurrentObservations(
+              observations.filter(observation => observation.cellId === cell.id),
+              capturedAt.getTime()
+            ).length,
             currentScore,
           };
       });
@@ -230,7 +236,7 @@ export default function App() {
 
   // 新規観測投稿のハンドラ
   const handleObservationSubmit = (newObs: Observation) => {
-    const nextObs = [newObs, ...observations];
+    const nextObs = [newObs, ...observations.filter(observation => observation.id !== newObs.id)].slice(0, 200);
     setObservations(nextObs);
 
     // 該当セルのスコアを再計算
@@ -238,12 +244,18 @@ export default function App() {
       prev.map((c) => {
         if (c.id === newObs.cellId) {
           const cellObs = nextObs.filter((o) => o.cellId === c.id);
-          const newScore = calculateRobustAnomalyScore(c, cellObs, earthquakes, c.socialSummary?.anomalyScore);
-          const updatedCell = { ...c, currentScore: newScore };
-          if (selectedCell.id === c.id) {
-            setSelectedCell(updatedCell);
-          }
-          return updatedCell;
+          const currentEarthquakes = sourceStatuses.some(source => source.key === 'earthquake' && source.isCurrent)
+            ? earthquakes
+            : [];
+          const currentSocialScore = sourceStatuses.some(source => source.key === 'social' && source.isCurrent)
+            ? c.socialSummary?.anomalyScore
+            : null;
+          const newScore = calculateRobustAnomalyScore(c, cellObs, currentEarthquakes, currentSocialScore);
+          return {
+            ...c,
+            recentObservationsCount: filterCurrentObservations(cellObs).length,
+            currentScore: newScore,
+          };
         }
         return c;
       })
@@ -319,11 +331,32 @@ export default function App() {
                 setSourceStatuses(current => current.map(source => source.key === 'social' ? {
                   ...source,
                   state: result.isLive && failed.length === 0 ? 'live' : 'degraded',
+                  isCurrent: result.isLive,
                   fetchedAt: result.fetchedAt,
                   recordCount: result.posts.length,
-                  detail: `公開投稿 ${result.posts.length}件${failed.length ? ` / ${failed.map(item => item.source).join('・')}低下` : ''}`,
-                  error: failed.map(item => `${item.source}: ${item.error || '取得失敗'}`).join(' / ') || undefined,
+                  detail: result.isLive
+                    ? `公開投稿 ${result.posts.length}件${failed.length ? ` / ${failed.map(item => item.source).join('・')}低下` : ''}`
+                    : `更新失敗 / 前回表示 ${result.posts.length}件`,
+                  error: result.error || failed.map(item => `${item.source}: ${item.error || '取得失敗'}`).join(' / ') || undefined,
                 } : source));
+                if (!result.isLive) {
+                  const currentEarthquakes = sourceStatuses.some(source => source.key === 'earthquake' && source.isCurrent)
+                    ? earthquakes
+                    : [];
+                  setCells(current => current.map(cell => ({
+                    ...cell,
+                    currentScore: calculateRobustAnomalyScore(
+                      cell,
+                      observations.filter(observation => observation.cellId === cell.id),
+                      currentEarthquakes,
+                      null
+                    ),
+                  })));
+                  return;
+                }
+                const currentEarthquakes = sourceStatuses.some(source => source.key === 'earthquake' && source.isCurrent)
+                  ? earthquakes
+                  : [];
                 const updatedCells = cells.map(cell => {
                     const rawSocialSummary = generateCellSocialSummary(cell.id, posts, '6h');
                     const socialSummary = applySocialBaseline(
@@ -336,7 +369,7 @@ export default function App() {
                     currentScore: calculateRobustAnomalyScore(
                       { ...cell, socialSummary },
                       observations.filter(observation => observation.cellId === cell.id),
-                      earthquakes,
+                      currentEarthquakes,
                       socialSummary.anomalyScore
                     ),
                   };
@@ -344,7 +377,7 @@ export default function App() {
                 setCells(updatedCells);
                 setObservationHistory(current => mergeObservationSnapshots(
                   current,
-                  createObservationSnapshots(updatedCells, capturedAt, { socialLive: true }),
+                  createObservationSnapshots(updatedCells, capturedAt, { socialLive: result.isLive }),
                   capturedAt
                 ));
               }}
@@ -419,8 +452,19 @@ export default function App() {
             <LocalDataManager
               observations={observations}
               history={observationHistory}
+              storageWarning={storageWarning}
               onClearObservations={() => setObservations([])}
               onClearHistory={() => setObservationHistory([])}
+              onRestore={(restoredObservations, restoredHistory) => {
+                setObservations(current => {
+                  const merged = new Map<string, Observation>(current.map(observation => [observation.id, observation]));
+                  restoredObservations.forEach(observation => merged.set(observation.id, observation));
+                  return [...merged.values()]
+                    .sort((a, b) => Date.parse(b.observedAt) - Date.parse(a.observedAt))
+                    .slice(0, 200);
+                });
+                setObservationHistory(current => mergeObservationSnapshots(current, restoredHistory));
+              }}
             />
           </div>
         )}

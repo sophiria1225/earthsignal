@@ -1,5 +1,6 @@
 import React, { useEffect, useState } from 'react';
 import { CheckCircle2, RefreshCw, Server, ShieldCheck, TriangleAlert } from 'lucide-react';
+import { fetchWithTimeout } from '../services/http';
 
 type CheckState = 'checking' | 'ok' | 'degraded';
 
@@ -18,7 +19,7 @@ const INITIAL_CHECKS: SourceCheck[] = [
 ];
 
 async function readJson(url: string): Promise<any> {
-  const response = await fetch(url, { headers: { Accept: 'application/json' } });
+  const response = await fetchWithTimeout(url, { headers: { Accept: 'application/json' } }, 55_000);
   if (!response.ok) throw new Error(`HTTP ${response.status}`);
   return response.json();
 }

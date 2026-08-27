@@ -4,7 +4,23 @@
  * Uses Median, MAD, Robust Z-score, Logistic 0-100 scaling, and Quality Coefficients
  */
 
-import { CellScore, ScoreContributor } from '../types';
+import { CellScore, Observation, ScoreContributor } from '../types';
+
+export const CURRENT_OBSERVATION_WINDOW_MS = 24 * 60 * 60_000;
+
+/** 現在の異常度に採用できる、直近24時間の確定済み端末観測だけを返す。 */
+export function filterCurrentObservations(
+  observations: Observation[],
+  now = Date.now()
+): Observation[] {
+  return observations.filter(observation => {
+    const observedAt = Date.parse(observation.observedAt);
+    return observation.status === 'finalized'
+      && Number.isFinite(observedAt)
+      && observedAt >= now - CURRENT_OBSERVATION_WINDOW_MS
+      && observedAt <= now + 5 * 60_000;
+  });
+}
 
 export interface BaselineStats {
   median: number;
@@ -126,10 +142,11 @@ export function computeCellScore(
   };
 
   const contributors: ScoreContributor[] = [];
+  // 同じ日の気象値を特徴量ごとに重複加算せず、利用したベースラインの最大標本数を示す。
   let totalSampleCount = 0;
 
   for (const f of features) {
-    totalSampleCount += f.baseline.sampleCount;
+    totalSampleCount = Math.max(totalSampleCount, f.baseline.sampleCount);
     const z = calculateRobustZ(f.currentValue, f.baseline.median, f.baseline.mad, f.direction || 'both');
     if (z === null) continue;
 
@@ -181,11 +198,13 @@ export function computeCellScore(
 
   const usable = categoryWeights.filter(c => c.score !== null);
   const weightSum = usable.reduce((s, c) => s + c.weight, 0);
+  // 気象が未取得でも、現在値を持つSNS・市民観測まで「古い」と扱わない。
+  const effectiveMinutesSinceUpdate = wxScore === null ? 0 : weatherInfo.minutesSinceUpdate;
   const quality = calculateQualityScore({
     sampleCount: totalSampleCount,
     targetSamples: 30,
     sourceAvailability: weightSum,
-    minutesSinceUpdate: weatherInfo.minutesSinceUpdate,
+    minutesSinceUpdate: effectiveMinutesSinceUpdate,
     isHighWindOrRain: isBadWeather,
   });
 
@@ -197,7 +216,7 @@ export function computeCellScore(
   } else {
     const weightedSum = usable.reduce((s, c) => s + Number(c.score) * c.weight, 0);
     overallScore = Math.round((weightedSum / weightSum) * 10) / 10;
-    if (weatherInfo.minutesSinceUpdate > 90) {
+    if (wxScore !== null && weatherInfo.minutesSinceUpdate > 90) {
       status = 'stale';
     }
   }
@@ -239,7 +258,7 @@ export function computeCellScore(
  */
 export function calculateRobustAnomalyScore(
   cell: { id: string; name: string; center: { latitude: number; longitude: number }; weather: any; currentScore: CellScore },
-  cellObservations: any[],
+  cellObservations: Observation[],
   recentEarthquakes: any[],
   socialAnomalyScore?: number | null
 ): CellScore {
@@ -247,7 +266,7 @@ export function calculateRobustAnomalyScore(
   const features: FeatureInput[] = [];
   const baseline = weather.baseline;
 
-  if (baseline?.sampleCount >= 7) {
+  if (!weather.isStale && baseline?.sampleCount >= 7) {
     features.push({
       name: 'cloud_cover_high',
       displayName: '上層雲量 (卷雲・巻積雲)',
@@ -278,7 +297,8 @@ export function calculateRobustAnomalyScore(
     });
   }
 
-  const reports = cellObservations.filter(o => o.type === 'citizen_report' && o.citizenReport);
+  const currentObservations = filterCurrentObservations(cellObservations);
+  const reports = currentObservations.filter(o => o.type === 'citizen_report' && o.citizenReport);
   if (reports.length >= 3) {
     const meanDifference = reports.reduce((sum, observation) =>
       sum + Number(observation.citizenReport.differenceFromNormal || 1), 0) / reports.length;
@@ -289,6 +309,46 @@ export function calculateRobustAnomalyScore(
       currentValue: Math.round(meanDifference * 10) / 10,
       baseline: { median: 1, mad: 0.75, sampleCount: reports.length },
       weight: 1.0,
+      direction: 'up',
+      unit: '/5',
+    });
+  }
+
+  const animalLabels = ['犬の鳴き声', '猫の鳴き声', '野鳥のさえずり', 'カラス', '虫・カエルの声'];
+  const animalAudio = currentObservations.filter(observation => observation.type === 'audio'
+    && observation.audioAnalysis
+    && observation.audioAnalysis.qualityScore >= 0.4
+    && observation.userConfirmation?.differenceFromNormal !== undefined
+    && observation.userConfirmation.confirmedLabels.some(label => animalLabels.includes(label)));
+  if (animalAudio.length >= 3) {
+    const meanDifference = animalAudio.reduce((sum, observation) =>
+      sum + Number(observation.userConfirmation?.differenceFromNormal || 1), 0) / animalAudio.length;
+    features.push({
+      name: 'confirmed_animal_audio',
+      displayName: '利用者確認済み動物音の「普段との差」',
+      category: 'animal_audio',
+      currentValue: Math.round(meanDifference * 10) / 10,
+      baseline: { median: 1, mad: 0.75, sampleCount: animalAudio.length },
+      weight: 1.0,
+      direction: 'up',
+      unit: '/5',
+    });
+  }
+
+  const cloudPhotos = currentObservations.filter(observation => observation.type === 'cloud_photo'
+    && observation.cloudAnalysis
+    && observation.cloudAnalysis.qualityScore >= 0.5
+    && observation.userConfirmation?.differenceFromNormal !== undefined);
+  if (cloudPhotos.length >= 3) {
+    const meanDifference = cloudPhotos.reduce((sum, observation) =>
+      sum + Number(observation.userConfirmation?.differenceFromNormal || 1), 0) / cloudPhotos.length;
+    features.push({
+      name: 'confirmed_cloud_photo',
+      displayName: '雲写真の「普段との差」自己評価',
+      category: 'citizen_report',
+      currentValue: Math.round(meanDifference * 10) / 10,
+      baseline: { median: 1, mad: 0.75, sampleCount: cloudPhotos.length },
+      weight: 0.8,
       direction: 'up',
       unit: '/5',
     });
@@ -323,18 +383,18 @@ export function calculateRobustAnomalyScore(
   }
 
   const fetchedAtMs = Date.parse(weather.fetchedAt || '');
-  const minutesSinceUpdate = Number.isFinite(fetchedAtMs)
+  const minutesSinceUpdate = !weather.isStale && Number.isFinite(fetchedAtMs)
     ? Math.max(0, (Date.now() - fetchedAtMs) / 60_000)
     : 999;
 
   return computeCellScore(
     features,
     {
-      windSpeed: weather.windSpeed || 0,
-      precipitation: weather.precipitation || 0,
+      windSpeed: weather.isStale ? 0 : weather.windSpeed || 0,
+      precipitation: weather.isStale ? 0 : weather.precipitation || 0,
       minutesSinceUpdate,
     },
-    reports.length,
+    reports.length + animalAudio.length + cloudPhotos.length,
     socialAnomalyScore
   );
 }

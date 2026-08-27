@@ -63,6 +63,67 @@ test('30日同時間帯の気象ベースラインから実スコアを算出す
     currentScore: {} as any,
   }, [], [], null);
   assert.equal(score.status, 'available');
+  assert.equal(score.sampleCount, 30);
   assert.ok(score.weatherScore !== null && score.weatherScore > 50);
   assert.ok(score.contributors.every(item => item.note?.includes('平常中央値')));
+});
+
+test('取得失敗でstaleになった気象値を現在の異常度へ再利用しない', () => {
+  const score = calculateRobustAnomalyScore({
+    id: 'cell_tokyo_01',
+    name: '東京',
+    center,
+    weather: {
+      fetchedAt: new Date().toISOString(),
+      isStale: true,
+      windSpeed: 2,
+      precipitation: 0,
+      cloudCoverHigh: 100,
+      pressureChange24h: -20,
+      temperature: 40,
+      baseline: {
+        sampleCount: 30,
+        cloudCoverHigh: { median: 30, mad: 10 },
+        pressureChange24h: { median: 0, mad: 2 },
+        temperature: { median: 27, mad: 2 },
+      },
+    },
+    currentScore: {} as any,
+  }, [], [], null);
+  assert.equal(score.weatherScore, null);
+  assert.equal(score.overallScore, null);
+});
+
+test('24時間を過ぎた市民観測を現在の異常度へ残さない', () => {
+  const oldReports = Array.from({ length: 3 }, (_, index) => ({
+    id: `old-${index}`,
+    type: 'citizen_report',
+    status: 'finalized',
+    observedAt: new Date(Date.now() - 25 * 60 * 60_000).toISOString(),
+    citizenReport: { differenceFromNormal: 5 },
+  })) as any[];
+  const score = calculateRobustAnomalyScore({
+    id: 'cell_tokyo_01', name: '東京', center,
+    weather: { fetchedAt: '', isStale: true, windSpeed: 0, precipitation: 0 },
+    currentScore: {} as any,
+  }, oldReports, [], null);
+  assert.equal(score.citizenReportScore, null);
+});
+
+test('利用者確認済みの動物音は3件以上かつ直近24時間の場合だけ集計する', () => {
+  const audioReports = Array.from({ length: 3 }, (_, index) => ({
+    id: `audio-${index}`,
+    type: 'audio',
+    status: 'finalized',
+    observedAt: new Date(Date.now() - index * 60_000).toISOString(),
+    audioAnalysis: { qualityScore: 0.8 },
+    userConfirmation: { confirmedLabels: ['犬の鳴き声'], differenceFromNormal: 4 },
+  })) as any[];
+  const score = calculateRobustAnomalyScore({
+    id: 'cell_tokyo_01', name: '東京', center,
+    weather: { fetchedAt: '', isStale: true, windSpeed: 0, precipitation: 0 },
+    currentScore: {} as any,
+  }, audioReports, [], null);
+  assert.ok(score.animalAudioScore !== null && score.animalAudioScore > 50);
+  assert.equal(score.overallScore, null, '単一の低ウェイト観測だけでは総合値を出さない');
 });

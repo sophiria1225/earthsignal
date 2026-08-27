@@ -9,10 +9,11 @@ import {
   deduplicateSocialPosts,
   fetchLiveBlueskyPosts,
   fetchLiveMastodonPosts,
+  hasSensitiveBlueskyLabel,
   normalizeBlueskyActor,
   normalizeSocialText,
 } from './src/services/snsCollector';
-import { SocialDerivedPost, SocialFetchResponse, SocialSourceType } from './src/types';
+import { BlueskyPublicProfileResponse, SocialDerivedPost, SocialFetchResponse, SocialSourceType } from './src/types';
 import {
   EarthquakeFeedResult,
   WeatherFeedResult,
@@ -24,6 +25,7 @@ import { INITIAL_GEO_CELLS } from './src/services/dataStore';
 // SNS検索APIへの過剰アクセスを避ける。24時間窓の集計用途なので5分で十分に新鮮。
 const SOCIAL_CACHE_TTL_MS = 5 * 60_000;
 const SOCIAL_REQUEST_TIMEOUT_MS = 8_000;
+const GEMINI_MODEL = 'gemini-3.7-flash';
 
 let socialCache: { expiresAt: number; response: SocialFetchResponse } | null = null;
 let socialRequestQueue: Promise<void> = Promise.resolve();
@@ -32,7 +34,13 @@ const weatherCache = new Map<string, { expiresAt: number; response: WeatherFeedR
 let earthquakeInFlight: Promise<EarthquakeFeedResult> | null = null;
 const weatherInFlight = new Map<string, Promise<WeatherFeedResult>>();
 let blueskySession: { accessJwt: string; expiresAt: number } | null = null;
-const blueskyProfileCache = new Map<string, { expiresAt: number; response: unknown }>();
+const blueskyProfileCache = new Map<string, { expiresAt: number; response: BlueskyPublicProfileResponse }>();
+
+class UpstreamHttpError extends Error {
+  constructor(public status: number, service: string) {
+    super(`${service} returned ${status}`);
+  }
+}
 
 async function fetchBlueskyPublicJson(url: URL): Promise<any> {
   let lastStatus = 0;
@@ -49,7 +57,8 @@ async function fetchBlueskyPublicJson(url: URL): Promise<any> {
     if (![403, 429].includes(response.status) && response.status < 500) break;
     if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
   }
-  throw new Error(`Bluesky public API returned ${lastStatus || 'no response'}`);
+  if (lastStatus) throw new UpstreamHttpError(lastStatus, 'Bluesky public API');
+  throw new Error('Bluesky public API did not respond');
 }
 
 async function getBlueskyAccessToken(): Promise<string | null> {
@@ -102,11 +111,28 @@ async function startServer() {
     : 3000;
 
   app.disable('x-powered-by');
+  if (process.env.NODE_ENV === 'production') app.set('trust proxy', 1);
   app.use(express.json({ limit: '64kb' }));
   app.use((req, res, next) => {
     res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('X-Frame-Options', 'DENY');
     res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Cross-Origin-Opener-Policy', 'same-origin');
     res.setHeader('Permissions-Policy', 'camera=(self), microphone=(self), geolocation=()');
+    if (process.env.NODE_ENV === 'production') {
+      res.setHeader('Content-Security-Policy', [
+        "default-src 'self'",
+        "script-src 'self'",
+        "style-src 'self' 'unsafe-inline'",
+        "img-src 'self' data: blob: https://cdn.bsky.app",
+        "connect-src 'self'",
+        "media-src 'self' blob:",
+        "font-src 'self' data:",
+        "object-src 'none'",
+        "base-uri 'self'",
+        "frame-ancestors 'none'",
+      ].join('; '));
+    }
     next();
   });
 
@@ -114,6 +140,11 @@ async function startServer() {
   app.use('/api/ai', (req, res, next) => {
     const key = req.ip || req.socket.remoteAddress || 'unknown';
     const now = Date.now();
+    if (aiRateLimits.size > 1_000) {
+      for (const [storedKey, value] of aiRateLimits) {
+        if (value.resetsAt <= now) aiRateLimits.delete(storedKey);
+      }
+    }
     const current = aiRateLimits.get(key);
     const state = !current || current.resetsAt <= now
       ? { count: 0, resetsAt: now + 60_000 }
@@ -133,6 +164,7 @@ async function startServer() {
       aiClient = new GoogleGenAI({
         apiKey: process.env.GEMINI_API_KEY,
         httpOptions: {
+          timeout: 15_000,
           headers: {
             'User-Agent': 'EarthSignal/1.0',
           },
@@ -218,8 +250,15 @@ async function startServer() {
     if (!handle) {
       return res.status(400).json({ error: 'Blueskyハンドルの形式が正しくありません' });
     }
+    // 公開情報でも入力したハンドルをブラウザ・CDNの共有キャッシュへ残さない。
+    res.setHeader('Cache-Control', 'no-store');
     const requestKey = req.ip || req.socket.remoteAddress || 'unknown';
     const now = Date.now();
+    if (blueskyProfileRateLimits.size > 1_000) {
+      for (const [key, value] of blueskyProfileRateLimits) {
+        if (value.resetsAt <= now) blueskyProfileRateLimits.delete(key);
+      }
+    }
     const currentLimit = blueskyProfileRateLimits.get(requestKey);
     const limitState = !currentLimit || currentLimit.resetsAt <= now
       ? { count: 0, resetsAt: now + 10 * 60_000 }
@@ -238,9 +277,9 @@ async function startServer() {
     }
 
     try {
-      const profileUrl = new URL('https://api.bsky.app/xrpc/app.bsky.actor.getProfile');
+      const profileUrl = new URL('https://public.api.bsky.app/xrpc/app.bsky.actor.getProfile');
       profileUrl.searchParams.set('actor', handle);
-      const feedUrl = new URL('https://api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed');
+      const feedUrl = new URL('https://public.api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed');
       feedUrl.searchParams.set('actor', handle);
       feedUrl.searchParams.set('limit', '100');
       feedUrl.searchParams.set('filter', 'posts_no_replies');
@@ -251,8 +290,12 @@ async function startServer() {
 
       const cutoff = Date.now() - 30 * 24 * 60 * 60_000;
       const relevantPosts = (Array.isArray(feed.feed) ? feed.feed : [])
+        // リポストは「自身が書いた本文」ではないため除外する。
+        .filter((item: any) => !item?.reason && item?.post?.author?.did === profile.did)
         .map((item: any) => item.post)
-        .filter((post: any) => post?.record?.text && Date.parse(post.record.createdAt) >= cutoff)
+        .filter((post: any) => post?.record?.text
+          && !hasSensitiveBlueskyLabel(post)
+          && Date.parse(post.record.createdAt) >= cutoff)
         .map((post: any) => {
           const text = normalizeSocialText(post.record.text);
           const classification = classifyTextByRules(text);
@@ -270,7 +313,7 @@ async function startServer() {
         })
         .filter((post: any) => !post.excluded)
         .slice(0, 30);
-      const response = {
+      const response: BlueskyPublicProfileResponse = {
         profile: {
           did: profile.did,
           handle: profile.handle,
@@ -291,11 +334,17 @@ async function startServer() {
         if (oldestKey) blueskyProfileCache.delete(oldestKey);
       }
       blueskyProfileCache.set(handle, { expiresAt: Date.now() + 5 * 60_000, response });
-      res.setHeader('Cache-Control', 'private, max-age=60');
       return res.json(response);
     } catch (error) {
-      const message = error instanceof Error ? error.message : 'Bluesky公開プロフィールを取得できません';
-      return res.status(message.includes('404') ? 404 : 502).json({ error: message });
+      if (error instanceof UpstreamHttpError && [400, 404].includes(error.status)) {
+        return res.status(404).json({ error: '指定したBluesky公開プロフィールが見つかりません' });
+      }
+      if (error instanceof UpstreamHttpError && error.status === 429) {
+        res.setHeader('Retry-After', '60');
+        return res.status(503).json({ error: 'Bluesky公開APIが混雑しています。しばらくしてから再試行してください。' });
+      }
+      console.warn('Bluesky public profile fetch failed:', error instanceof Error ? error.message : error);
+      return res.status(502).json({ error: 'Bluesky公開プロフィールを現在取得できません' });
     }
   });
 
@@ -454,16 +503,31 @@ async function startServer() {
   // 5. AI Explanation / Hypothesis Verification endpoint using Gemini API
   app.post('/api/ai/explain-anomaly', async (req, res) => {
     try {
-      const cellName = typeof req.body?.cellName === 'string' ? req.body.cellName.trim().slice(0, 120) : '';
+      const cellId = typeof req.body?.cellId === 'string' ? req.body.cellId.trim() : '';
+      const cell = INITIAL_GEO_CELLS.find(candidate => candidate.id === cellId);
+      if (!cell) return res.status(400).json({ error: 'Unknown observation cell' });
+      res.setHeader('Cache-Control', 'no-store');
+      const cellName = cell.name;
       const score = typeof req.body?.score === 'number' && Number.isFinite(req.body.score)
         ? Math.min(100, Math.max(0, req.body.score))
         : null;
+      const allowedContributorNames = new Set([
+        '上層雲量 (卷雲・巻積雲)',
+        '24時間気圧変動幅',
+        '同時間帯気温',
+        '市民レポートの「普段との差」自己評価',
+        '利用者確認済み動物音の「普段との差」',
+        '雲写真の「普段との差」自己評価',
+        '周辺250kmの地震情報件数',
+      ]);
       const contributors = Array.isArray(req.body?.contributors)
         ? req.body.contributors
           .filter((item: unknown) => item && typeof item === 'object')
           .slice(0, 10)
           .map((item: Record<string, unknown>) => ({
-            displayName: typeof item.displayName === 'string' ? item.displayName.slice(0, 100) : '観測項目',
+            displayName: typeof item.displayName === 'string' && allowedContributorNames.has(item.displayName)
+              ? item.displayName
+              : '観測項目',
             changeRate: typeof item.changeRate === 'string' ? item.changeRate.slice(0, 30) : undefined,
             zScore: typeof item.zScore === 'number' && Number.isFinite(item.zScore) ? item.zScore : undefined,
             contribution: typeof item.contribution === 'number' && Number.isFinite(item.contribution)
@@ -472,9 +536,20 @@ async function startServer() {
           }))
         : [];
       const confounders = Array.isArray(req.body?.confounders)
-        ? req.body.confounders.filter((item: unknown) => typeof item === 'string').slice(0, 10).map((item: string) => item.slice(0, 200))
+        ? req.body.confounders
+          .filter((item: unknown) => typeof item === 'string')
+          .slice(0, 10)
+          .map((item: string) => {
+            const wind = item.match(/^強風\(([\d.]+)m\/s\)/);
+            if (wind) return `強風(${Number(wind[1]).toFixed(1)}m/s)による音響品質補正`;
+            const rain = item.match(/^降雨\(([\d.]+)mm\)/);
+            if (rain) return `降雨(${Number(rain[1]).toFixed(1)}mm)による環境音補正`;
+            const reports = item.match(/^市民観測は(\d+)件/);
+            if (reports) return `市民観測${Math.min(200, Number(reports[1]))}件（標本数を考慮）`;
+            return null;
+          })
+          .filter((item): item is string => Boolean(item))
         : [];
-      if (!cellName) return res.status(400).json({ error: 'cellName is required' });
       if (score === null) {
         return res.json({
           explanation: '実測ベースラインまたは有効な観測項目が不足しているため、現在は異常度を算出していません。データ蓄積後に再評価します。※地震発生確率ではありません。',
@@ -501,17 +576,31 @@ async function startServer() {
 `;
 
         const response = await ai.models.generateContent({
-          model: 'gemini-3.7-flash',
+          model: GEMINI_MODEL,
           contents: prompt,
           config: {
-            temperature: 0.2,
             maxOutputTokens: 256,
           },
         });
 
+        const generated = response.text?.replace(/\s+/g, ' ').trim() || '';
+        const unsafeClaim = /(地震.{0,8}(起きる|発生する|可能性|恐れ)|予知|予兆|前兆|危険度|避難)/i.test(generated);
+        if (generated && !unsafeClaim) {
+          const disclaimer = '※本スコアは平常時データとの差異を示すもので、地震発生確率ではありません。';
+          const body = generated
+            .replace(/※本スコアは平常時データとの差異を示すもので、地震発生確率ではありません。?$/u, '')
+            .trim()
+            .slice(0, 320);
+          if (body) {
+            return res.json({
+              explanation: `${body}${/[。！？]$/u.test(body) ? '' : '。'}${disclaimer}`,
+              source: GEMINI_MODEL,
+            });
+          }
+        }
         return res.json({
-          explanation: response.text?.trim() || '平常時ベースラインとの統計的乖離を計算しています。',
-          source: 'gemini-3.7-flash',
+          explanation: `地域（${cellName}）の観測異常度は ${score} / 100 です。利用可能な実測ベースラインとの差だけを示し、履歴不足の項目は採点していません。※本スコアは地震発生確率ではありません。`,
+          source: 'rule-based-safety-fallback',
         });
       } else {
         // Fallback rule-based explanation

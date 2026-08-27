@@ -1,4 +1,4 @@
-import React, { useState, useEffect } from 'react';
+import React, { useState, useEffect, useRef } from 'react';
 import { GeoCell, SocialCategory, SocialDerivedPost, SocialFetchResponse, SocialFetchSourceStatus, SocialHourlySummary, SocialSourceType } from '../types';
 import { 
   KEYWORD_DICTIONARY, 
@@ -51,9 +51,11 @@ export const SocialObservationView: React.FC<Props> = ({
   const [liveFetchStatus, setLiveFetchStatus] = useState<string | null>(null);
   const [sourceStatuses, setSourceStatuses] = useState<SocialFetchSourceStatus[]>([]);
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
+  const postsRef = useRef<SocialDerivedPost[]>(initialPosts);
 
   useEffect(() => {
     setPostsList(initialPosts);
+    postsRef.current = initialPosts;
   }, [initialPosts]);
 
   // 初期マウント時の自動取得と、サーバーキャッシュ周期に合わせた定期更新（5分毎）
@@ -75,6 +77,7 @@ export const SocialObservationView: React.FC<Props> = ({
     try {
       const result = await fetchLiveSocialPosts();
       setPostsList(result.posts);
+      postsRef.current = result.posts;
       onPostsChange?.(result.posts, result);
       setSourceStatuses(result.sources);
 
@@ -95,6 +98,21 @@ export const SocialObservationView: React.FC<Props> = ({
     } catch (e: unknown) {
       console.error(e);
       const message = e instanceof Error ? e.message : '不明なエラー';
+      const failedSources: SocialFetchSourceStatus[] = (['bluesky', 'mastodon'] as const).map(source => ({
+        source,
+        ok: false,
+        fetched: 0,
+        error: message,
+      }));
+      setSourceStatuses(failedSources);
+      const previousPosts = postsRef.current;
+      onPostsChange?.(previousPosts, {
+        posts: previousPosts,
+        fetchedAt: new Date().toISOString(),
+        isLive: false,
+        sources: failedSources,
+        error: message,
+      });
       setLiveFetchStatus(`リアルタイム取得エラー: ${message}`);
     } finally {
       setIsLoadingLive(false);
@@ -197,7 +215,7 @@ export const SocialObservationView: React.FC<Props> = ({
           </a>
 
           <a
-            href="https://www.youtube.com/results?search_query=%E5%9C%B0%E9%9C%87+%E9%9B%B2+%E5%89%8D%E5%85%86"
+            href="https://www.youtube.com/results?search_query=%E5%9C%B0%E9%9C%87+%E9%9B%B2+%E8%A6%B3%E6%B8%AC"
             target="_blank"
             rel="noopener noreferrer"
             className="p-2.5 bg-white dark:bg-slate-900 rounded-xl border border-slate-200 dark:border-slate-700 hover:border-indigo-400 dark:hover:border-indigo-500 flex items-center justify-between transition-all group"

@@ -55,6 +55,12 @@ export const HomeDashboard: React.FC<Props> = ({
 }) => {
   const latestEq = recentEarthquakes[0];
   const score = selectedCell.currentScore;
+  const earthquakeStatus = sourceStatuses.find(source => source.key === 'earthquake');
+  const socialStatus = sourceStatuses.find(source => source.key === 'social');
+  const selectedCellObservations = recentObservations
+    .filter(observation => observation.cellId === selectedCell.id)
+    .sort((a, b) => Date.parse(b.observedAt) - Date.parse(a.observedAt))
+    .slice(0, 6);
   const weatherFetchedAt = Date.parse(selectedCell.weather.fetchedAt || '');
   const hasLiveWeather = !selectedCell.weather.isStale && Number.isFinite(weatherFetchedAt);
 
@@ -108,18 +114,23 @@ export const HomeDashboard: React.FC<Props> = ({
           <div>
             <div className="flex items-center justify-between mb-3">
               <div className="flex items-center gap-2">
-                <span className="w-2.5 h-2.5 rounded-full bg-red-500 animate-ping" />
+                <span className={`w-2.5 h-2.5 rounded-full ${earthquakeStatus?.isCurrent ? 'bg-red-500 animate-ping' : 'bg-amber-500'}`} />
                 <h3 className="font-bold text-slate-900 dark:text-white flex items-center gap-1.5 text-base">
                   最新の公式地震情報
                 </h3>
               </div>
               <span className="text-[11px] font-medium px-2 py-0.5 rounded bg-red-50 dark:bg-red-950/40 text-red-700 dark:text-red-300 border border-red-200 dark:border-red-800">
-                P2P地震情報 / 気象庁
+                {earthquakeStatus?.state === 'loading' ? '取得中' : earthquakeStatus?.isCurrent ? 'P2P地震情報 / 気象庁' : '前回取得データ'}
               </span>
             </div>
 
             {latestEq ? (
               <div className="space-y-3">
+                {!earthquakeStatus?.isCurrent && (
+                  <div className="text-[11px] text-amber-700 dark:text-amber-300 bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 rounded-lg px-3 py-2">
+                    現在の地震API更新に失敗したため、画面を空にせず前回取得分を表示しています。
+                  </div>
+                )}
                 <div className="bg-slate-50 dark:bg-slate-900/60 p-4 rounded-xl border border-slate-200/70 dark:border-slate-800">
                   <div className="flex items-start justify-between gap-2">
                     <div>
@@ -190,7 +201,9 @@ export const HomeDashboard: React.FC<Props> = ({
                 </div>
               </div>
             ) : (
-              <div className="p-8 text-center text-slate-500 text-sm">地震情報を受信中...</div>
+              <div className="p-8 text-center text-slate-500 text-sm">
+                {earthquakeStatus?.state === 'loading' ? '地震情報を取得中…' : '現在、地震情報を取得できません。'}
+              </div>
             )}
           </div>
 
@@ -269,7 +282,7 @@ export const HomeDashboard: React.FC<Props> = ({
                     <span>データ品質指標: {(score.qualityScore * 100).toFixed(0)}%</span>
                   </div>
                   <div className="text-slate-500 text-[11px]">
-                    有効観測標本数: {score.sampleCount} 件
+                    最大比較標本数: {score.sampleCount} 件
                   </div>
                   <button
                     onClick={() => onOpenExplanationModal(selectedCell)}
@@ -441,9 +454,12 @@ export const HomeDashboard: React.FC<Props> = ({
               </span>
             </div>
             <p className="text-xs text-slate-600 dark:text-slate-400 leading-relaxed">
-              直近6時間の関連投稿: <strong>{selectedCell.socialSummary?.totalPosts ?? 0}件</strong> （ハッシュ化識別子による投稿者数: {selectedCell.socialSummary?.uniqueActorEstimate ?? 0}名 / 品質スコア: {selectedCell.socialSummary?.qualityScore ?? 0}）。
+              {socialStatus?.state === 'loading' ? '取得中' : socialStatus?.isCurrent ? '直近6時間' : '前回取得分'}の地域明示投稿: <strong>{selectedCell.socialSummary?.totalPosts ?? 0}件</strong> / 全国参考（24時間）: <strong>{socialStatus?.recordCount ?? 0}件</strong> （地域内のハッシュ化識別子による投稿者数: {selectedCell.socialSummary?.uniqueActorEstimate ?? 0}名 / 品質スコア: {selectedCell.socialSummary?.qualityScore ?? 0}）。
               雲・空模様 ({selectedCell.socialSummary?.categories.cloud ?? 0}件) や動物・鳥類 ({selectedCell.socialSummary?.categories.animal ?? 0}件) の言及をルールベースで分類しています。
             </p>
+            {socialStatus?.state === 'degraded' && !socialStatus.isCurrent && (
+              <p className="text-[11px] text-amber-600 dark:text-amber-400">SNS公開APIの現在値を取得できていません。0件を「投稿なし」とは判定しません。</p>
+            )}
           </div>
 
           <div className="flex items-center gap-2 shrink-0">
@@ -543,19 +559,19 @@ export const HomeDashboard: React.FC<Props> = ({
           <div className="flex items-center gap-2">
             <Radio className="w-4 h-4 text-emerald-500" />
             <h4 className="font-bold text-slate-900 dark:text-white text-sm">
-              地域セルの最新観測フィード (匿名集計)
+              この端末の保存済み最新観測
             </h4>
           </div>
           <span className="text-xs text-slate-500">位置はセル中心へ丸め済</span>
         </div>
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-3">
-          {recentObservations.length === 0 && (
+          {selectedCellObservations.length === 0 && (
             <div className="md:col-span-3 rounded-xl border border-dashed border-slate-300 dark:border-slate-700 p-6 text-center text-xs text-slate-500">
               まだ保存された市民観測はありません。音・雲・身の回りの変化を記録すると、ここに端末内保存の集計結果が表示されます。
             </div>
           )}
-          {recentObservations.map((obs) => (
+          {selectedCellObservations.map((obs) => (
             <div
               key={obs.id}
               className="p-3 rounded-xl bg-slate-50 dark:bg-slate-900/60 border border-slate-200/70 dark:border-slate-800 text-xs space-y-2"
@@ -608,7 +624,7 @@ export const HomeDashboard: React.FC<Props> = ({
 
               <div className="text-[10px] text-slate-400 flex items-center justify-between pt-1 border-t border-slate-200/50 dark:border-slate-800">
                 <span>{obs.cellName}</span>
-                <span className="bg-slate-200/60 dark:bg-slate-800 px-1.5 py-0.5 rounded">匿名集計</span>
+                <span className="bg-slate-200/60 dark:bg-slate-800 px-1.5 py-0.5 rounded">端末内保存</span>
               </div>
             </div>
           ))}

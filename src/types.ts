@@ -134,6 +134,7 @@ export interface RuntimeDataSourceStatus {
   key: RuntimeSourceKey;
   label: string;
   state: 'loading' | 'live' | 'degraded';
+  isCurrent: boolean;
   fetchedAt?: string;
   recordCount: number;
   detail: string;
@@ -205,6 +206,7 @@ export type ObservationVisibility = 'private' | 'aggregate_only' | 'anonymous_pu
 export interface UserConfirmation {
   confirmedLabels: string[];
   aiResultCorrect: 'yes' | 'partially' | 'no' | 'unknown';
+  differenceFromNormal?: number; // 利用者自身の平常時と比べた1〜5段階評価
   userNotes?: string;
 }
 

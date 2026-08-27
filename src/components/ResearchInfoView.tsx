@@ -50,7 +50,7 @@ export const ResearchInfoView: React.FC = () => {
             現代の地震学および気象庁の公式見解において、<strong>「日時・場所・規模を特定した確度の高い地震予知手法」は確立されていません</strong>。
           </p>
           <p>
-            過去に民間やSNSで「前兆現象」と主張された事例の多くは、地震発生後に偶然の出来事を後付けで結びつける「想起バイアス（Confirmation Bias）」や、低気圧接近に伴う気象現象（大気擾乱による雲の筋や強風音）であることが学術的に示されています。
+            民間やSNSで「前兆現象」と主張される情報は、地震発生後の想起バイアスや、低気圧・強風・生活音など別の要因でも説明できる可能性があります。そのため、因果関係を前提にせず対照期間と交絡要因を分けて検証します。
           </p>
           <p>
             本プラットフォームでは、「地震が起きるかどうか」を予測・警告するのではなく、<strong>利用可能な実測履歴（気象は過去30日の同一地域・同一時間帯）と比べて、現在の観測データが統計的にどれだけ珍しいか</strong>を算出します。履歴が不足するSNS・市民観測は推測値を置かず、データ不足として扱います。
@@ -112,7 +112,7 @@ export const ResearchInfoView: React.FC = () => {
               元写真・EXIFを保存しない端末内解析
             </span>
             <p className="text-slate-600 dark:text-slate-400 leading-relaxed">
-              アップロードされた写真から、自宅住所が特定されるGPS緯度経度・端末固有情報を即座にストリップ（除去）します。公開される位置はH3地理セルの中心座標に丸められます。
+              選択した写真はブラウザ内で縮小して画素解析し、元ファイルやEXIFを保存・送信しません。記録する位置は端末GPSではなく、利用者が選択した代表地域の中心座標です。現在の観測は外部公開しません。
             </p>
           </div>
         </div>
@@ -127,11 +127,19 @@ export const ResearchInfoView: React.FC = () => {
         <ul className="text-xs space-y-2 text-slate-600 dark:text-slate-400">
           <li className="flex items-center gap-2">
             <span className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
-            <span><strong>P2P地震情報 API v2:</strong> 気象庁が発表する緊急地震速報・地震情報（震源・震度）のリアルタイム配信基盤。</span>
+            <span><a href="https://www.jma.go.jp/jma/kishou/know/faq/faq24.html" target="_blank" rel="noopener noreferrer" className="font-bold text-indigo-600 dark:text-indigo-400 hover:underline">気象庁「地震予知について」 <ExternalLink className="w-3 h-3 inline" /></a>: 確度の高い日時・場所・規模の予測が難しいこと、および「地震雲」の科学的説明が確立していないことに関する公式見解。</span>
           </li>
           <li className="flex items-center gap-2">
             <span className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
-            <span><strong>Open-Meteo Weather API:</strong> 気象庁GSM/ECMWF等の全球気象数値予報モデルに基づく雲量・海面気圧・地上風速データ。</span>
+            <span><a href="https://www.p2pquake.net/develop/json_api_v2/" target="_blank" rel="noopener noreferrer" className="font-bold text-indigo-600 dark:text-indigo-400 hover:underline">P2P地震情報 API v2 <ExternalLink className="w-3 h-3 inline" /></a>: 気象庁発表に基づく地震情報（震源・震度）の配信基盤。本アプリは現在、地震情報コード551を取得します。</span>
+          </li>
+          <li className="flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
+            <span><a href="https://open-meteo.com/en/docs" target="_blank" rel="noopener noreferrer" className="font-bold text-indigo-600 dark:text-indigo-400 hover:underline">Open-Meteo Weather API <ExternalLink className="w-3 h-3 inline" /></a>: 利用地点に応じた気象モデルに基づく雲量・海面気圧・地上風速データと、過去30日の同時間帯比較値。</span>
+          </li>
+          <li className="flex items-center gap-2">
+            <span className="w-1.5 h-1.5 rounded-full bg-indigo-500" />
+            <span><a href="https://github.com/bluesky-social/atproto/blob/main/lexicons/app/bsky/feed/searchPostsV2.json" target="_blank" rel="noopener noreferrer" className="font-bold text-indigo-600 dark:text-indigo-400 hover:underline">Bluesky AT Protocol Lexicon <ExternalLink className="w-3 h-3 inline" /></a>: 公開検索V2と公開プロフィール投稿を取得。投稿者識別子はサーバーで不可逆ハッシュ化します。</span>
           </li>
           <li className="flex items-center gap-2">
             <span className="w-1.5 h-1.5 rounded-full bg-indigo-500" />

@@ -2,6 +2,7 @@ import React, { useState, useRef } from 'react';
 import { useDialogAccessibility } from '../hooks/useDialogAccessibility';
 import { GeoCell, Observation, CloudAnalysis } from '../types';
 import { analyzeCloudImage } from '../services/cloudAI';
+import { createLocalId } from '../services/id';
 import { 
   X, 
   Camera, 
@@ -27,20 +28,34 @@ export const CloudPhotoModal: React.FC<Props> = ({ cell, onClose, onSubmitObserv
   const [userShapeHint, setUserShapeHint] = useState<string>('other');
   const [direction, setDirection] = useState('南西');
   const [elevation, setElevation] = useState(40);
+  const [differenceFromNormal, setDifferenceFromNormal] = useState(3);
   const [isAnalyzing, setIsAnalyzing] = useState(false);
   const [analysisResult, setAnalysisResult] = useState<CloudAnalysis | null>(null);
+  const [analysisError, setAnalysisError] = useState<string | null>(null);
   const [isCompleted, setIsCompleted] = useState(false);
 
   const fileInputRef = useRef<HTMLInputElement | null>(null);
 
-  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
-    if (e.target.files && e.target.files[0]) {
-      const file = e.target.files[0];
-      setSelectedFile(file);
-      if (previewUrl) URL.revokeObjectURL(previewUrl);
-      const url = URL.createObjectURL(file);
-      setPreviewUrl(url);
+  const selectFile = (file: File) => {
+    setAnalysisError(null);
+    if (!['image/jpeg', 'image/png', 'image/webp'].includes(file.type)) {
+      setAnalysisError('JPEG・PNG・WebP形式の画像を選択してください。');
+      return;
     }
+    if (file.size > 12 * 1024 * 1024) {
+      setAnalysisError('画像サイズが12MBを超えています。小さい画像を選択してください。');
+      return;
+    }
+    setSelectedFile(file);
+    setAnalysisResult(null);
+    if (previewUrl) URL.revokeObjectURL(previewUrl);
+    setPreviewUrl(URL.createObjectURL(file));
+  };
+
+  const handleFileChange = (e: React.ChangeEvent<HTMLInputElement>) => {
+    const file = e.target.files?.[0];
+    if (file) selectFile(file);
+    e.target.value = '';
   };
 
   React.useEffect(() => {
@@ -52,13 +67,15 @@ export const CloudPhotoModal: React.FC<Props> = ({ cell, onClose, onSubmitObserv
   const handleAnalyze = async () => {
     if (!selectedFile) return;
     setIsAnalyzing(true);
+    setAnalysisError(null);
 
     try {
-      const obsId = `obs_cld_${Date.now()}`;
+      const obsId = createLocalId('obs_cld');
       const result = await analyzeCloudImage(selectedFile, obsId, userShapeHint, direction, elevation);
       setAnalysisResult(result);
     } catch (err) {
       console.error('Cloud analysis failed:', err);
+      setAnalysisError('画像を解析できませんでした。別の画像形式または小さい画像で再試行してください。');
     } finally {
       setIsAnalyzing(false);
     }
@@ -77,13 +94,14 @@ export const CloudPhotoModal: React.FC<Props> = ({ cell, onClose, onSubmitObserv
         latitude: cell.center.latitude,
         longitude: cell.center.longitude,
       },
-      visibility: 'aggregate_only',
+      visibility: 'private',
       status: 'finalized',
       createdAt: new Date().toISOString(),
       cloudAnalysis: analysisResult,
       userConfirmation: {
         confirmedLabels: [analysisResult.detectedCloudTypes[0]?.displayName || '雲観測'],
         aiResultCorrect: 'unknown',
+        differenceFromNormal,
       },
     };
 
@@ -137,6 +155,12 @@ export const CloudPhotoModal: React.FC<Props> = ({ cell, onClose, onSubmitObserv
                       fileInputRef.current?.click();
                     }
                   }}
+                  onDragOver={(event) => event.preventDefault()}
+                  onDrop={(event) => {
+                    event.preventDefault();
+                    const file = event.dataTransfer.files?.[0];
+                    if (file) selectFile(file);
+                  }}
                   role="button"
                   tabIndex={0}
                   aria-label="解析する雲の写真を選択"
@@ -150,21 +174,21 @@ export const CloudPhotoModal: React.FC<Props> = ({ cell, onClose, onSubmitObserv
                       雲の写真をアップロード
                     </span>
                     <span className="text-xs text-slate-500 block mt-1">
-                      クリックまたはドラッグ＆ドロップ (JPEG, PNG)
+                      クリックまたはドラッグ＆ドロップ（JPEG・PNG・WebP、最大12MB）
                     </span>
                   </div>
                   <input
                     type="file"
                     ref={fileInputRef}
                     onChange={handleFileChange}
-                    accept="image/*"
+                    accept="image/jpeg,image/png,image/webp"
                     className="hidden"
                   />
                 </div>
               ) : (
                 <div className="space-y-3">
                   <div className="relative rounded-xl overflow-hidden max-h-56 bg-black flex items-center justify-center">
-                    <img src={previewUrl} alt="Cloud Preview" className="max-h-56 object-contain" />
+                    <img src={previewUrl} alt="解析前の雲写真プレビュー" className="max-h-56 object-contain" />
                     <button
                       type="button"
                       onClick={() => {
@@ -183,6 +207,13 @@ export const CloudPhotoModal: React.FC<Props> = ({ cell, onClose, onSubmitObserv
                     <ShieldCheck className="w-4 h-4 shrink-0" />
                     <span>✓ 元写真とEXIFは送信・保存せず、端末内で画素だけを解析します。</span>
                   </div>
+                </div>
+              )}
+
+              {analysisError && (
+                <div role="alert" className="p-3 rounded-xl bg-rose-50 dark:bg-rose-950/40 border border-rose-200 dark:border-rose-800 text-xs text-rose-700 dark:text-rose-300 flex items-start gap-2">
+                  <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+                  <span>{analysisError}</span>
                 </div>
               )}
 
@@ -242,6 +273,23 @@ export const CloudPhotoModal: React.FC<Props> = ({ cell, onClose, onSubmitObserv
                 </div>
               </div>
 
+              <div className="space-y-1.5 bg-slate-50 dark:bg-slate-900/60 p-3 rounded-xl border border-slate-200 dark:border-slate-800">
+                <div className="flex items-center justify-between text-xs font-bold text-slate-800 dark:text-slate-200">
+                  <label htmlFor="cloud-difference">普段の同じ場所・時間帯との違い</label>
+                  <span className="text-cyan-600 dark:text-cyan-400">Lv {differenceFromNormal} / 5</span>
+                </div>
+                <input
+                  id="cloud-difference"
+                  type="range"
+                  min={1}
+                  max={5}
+                  value={differenceFromNormal}
+                  onChange={(event) => setDifferenceFromNormal(Number(event.target.value))}
+                  className="w-full accent-cyan-600"
+                />
+                <div className="flex justify-between text-[10px] text-slate-400"><span>普段とほぼ同じ</span><span>極めて珍しい</span></div>
+              </div>
+
               {/* 解析ボタン */}
               {previewUrl && !analysisResult && (
                 <button
@@ -286,7 +334,7 @@ export const CloudPhotoModal: React.FC<Props> = ({ cell, onClose, onSubmitObserv
                   <div className="p-2.5 bg-amber-500/10 border border-amber-500/20 rounded-xl text-xs text-amber-900 dark:text-amber-200 flex items-start gap-1.5">
                     <Info className="w-3.5 h-3.5 text-amber-600 shrink-0 mt-0.5" />
                     <span>
-                      ※科学的に「地震雲」と呼ばれる雲は存在せず、気象条件（大気の波・ジェット気流等）による形状候補を表示しています。
+                      ※「地震雲」の定義や地震との関係は科学的に説明されていません。ここでは大気の波・ジェット気流など、一般的な気象要因による形状候補だけを表示します。
                     </span>
                   </div>
 
@@ -306,7 +354,7 @@ export const CloudPhotoModal: React.FC<Props> = ({ cell, onClose, onSubmitObserv
                 雲写真の登録が完了しました
               </h4>
               <p className="text-xs text-slate-500">
-                位置セルと紐付けられた匿名観測データとして集計されます。
+                選択した代表地域と紐付け、このブラウザ内だけに保存しました。元写真は保存していません。
               </p>
             </div>
           )}

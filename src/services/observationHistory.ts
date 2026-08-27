@@ -38,11 +38,22 @@ function median(values: number[]): number {
 function isSnapshot(value: unknown): value is ObservationSnapshot {
   if (!value || typeof value !== 'object') return false;
   const item = value as Partial<ObservationSnapshot>;
+  const numericOrNull = (candidate: unknown) => candidate === null
+    || (typeof candidate === 'number' && Number.isFinite(candidate));
   return item.version === 1
     && typeof item.cellId === 'string'
     && typeof item.capturedAt === 'string'
     && typeof item.hourBucket === 'string'
-    && Number.isFinite(Date.parse(item.capturedAt));
+    && Number.isFinite(Date.parse(item.capturedAt))
+    && Number.isFinite(Date.parse(item.hourBucket))
+    && numericOrNull(item.overallScore)
+    && numericOrNull(item.weatherScore)
+    && numericOrNull(item.earthquakeScore)
+    && numericOrNull(item.socialScore)
+    && numericOrNull(item.socialPostCount)
+    && numericOrNull(item.cloudCoverHigh)
+    && numericOrNull(item.pressureChange24h)
+    && numericOrNull(item.temperature);
 }
 
 export function parseObservationHistory(raw: string | null): ObservationSnapshot[] {

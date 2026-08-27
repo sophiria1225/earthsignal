@@ -5,7 +5,9 @@ import {
   classifyTextByRules,
   deduplicateSocialPosts,
   extractLocationFromText,
+  extractBlueskyActorInput,
   generateCellSocialSummary,
+  hasSensitiveBlueskyLabel,
   fetchLiveBlueskyPosts,
   mastodonHtmlToText,
   normalizeBlueskyActor,
@@ -15,6 +17,19 @@ test('Blueskyの公開actor入力を正規化しURLや検索式を拒否する',
   assert.equal(normalizeBlueskyActor(' @Example.Bsky.Social '), 'example.bsky.social');
   assert.equal(normalizeBlueskyActor('https://bsky.app/profile/example.bsky.social'), null);
   assert.equal(normalizeBlueskyActor('地震雲 OR 地鳴り'), null);
+  assert.equal(normalizeBlueskyActor('not-a-domain'), null);
+  assert.equal(normalizeBlueskyActor('bad..handle.social'), null);
+});
+
+test('UIではBluesky公式プロフィールURLからactorだけを安全に取り出す', () => {
+  assert.equal(extractBlueskyActorInput('https://bsky.app/profile/example.bsky.social'), 'example.bsky.social');
+  assert.equal(extractBlueskyActorInput('https://example.com/profile/example.bsky.social'), null);
+  assert.equal(extractBlueskyActorInput('https://bsky.app/profile/example.bsky.social/post/abc'), null);
+});
+
+test('Blueskyのセンシティブラベル付き投稿を判定する', () => {
+  assert.equal(hasSensitiveBlueskyLabel({ labels: [{ val: 'porn' }] }), true);
+  assert.equal(hasSensitiveBlueskyLabel({ labels: [{ val: 'warn' }] }), false);
 });
 
 test('Bluesky V2検索は一時的な403を再試行する', async () => {
@@ -82,6 +97,11 @@ test('原因が雷と分かる音や比喩表現を観測投稿から除外す�
   assert.equal(classifyTextByRules('地鳴りみたいな雷が鳴っている').category, 'unrelated');
   assert.equal(classifyTextByRules('ライブ会場が地鳴りのような歓声だった').category, 'unrelated');
   assert.equal(classifyTextByRules('東京で原因不明の地鳴りが続いている').category, 'sound');
+});
+
+test('引用記事だけの言及は除外し、本人の現在観測は残す', () => {
+  assert.equal(classifyTextByRules('ニュース記事まとめ: 東京で地鳴り').category, 'unrelated');
+  assert.equal(classifyTextByRules('ニュースを見たが、今も東京で地鳴りが聞こえる').category, 'sound');
 });
 
 test('Mastodon HTMLを安全なプレーンテキストへ変換する', () => {
