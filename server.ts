@@ -642,6 +642,19 @@ async function startServer() {
     }
   });
 
+  // APIの打ち間違いをSPA成功応答に見せず、機械判読できるJSONで返す。
+  app.use('/api', (req, res) => {
+    res.status(404).json({ error: 'API endpoint not found' });
+  });
+
+  // express.json の構文エラーをHTMLではなく一貫したJSON 400にする。
+  app.use((error: unknown, req: express.Request, res: express.Response, next: express.NextFunction) => {
+    if (error instanceof SyntaxError && 'body' in error) {
+      return res.status(400).json({ error: 'Request body must be valid JSON' });
+    }
+    next(error);
+  });
+
   // 6. Vite middleware for development vs Static files for production
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
@@ -651,8 +664,19 @@ async function startServer() {
     app.use(vite.middlewares);
   } else {
     const distPath = path.join(process.cwd(), 'dist');
-    app.use(express.static(distPath));
+    app.use(express.static(distPath, {
+      setHeaders: (res, filePath) => {
+        if (path.basename(filePath) === 'index.html') {
+          res.setHeader('Cache-Control', 'no-cache');
+        } else if (filePath.includes(`${path.sep}assets${path.sep}`)) {
+          res.setHeader('Cache-Control', 'public, max-age=31536000, immutable');
+        } else {
+          res.setHeader('Cache-Control', 'public, max-age=3600');
+        }
+      },
+    }));
     app.get('*', (req, res) => {
+      res.setHeader('Cache-Control', 'no-cache');
       res.sendFile(path.join(distPath, 'index.html'));
     });
   }

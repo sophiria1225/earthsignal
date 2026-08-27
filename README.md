@@ -31,7 +31,10 @@ npm run lint
 npm test
 npm run build
 npm audit --omit=dev
+npm run smoke
 ```
+
+`npm run smoke` はビルド済みの本番サーバーを一時ポートで起動し、主要APIとセキュリティヘッダーをHTTP経由で確認します。
 
 ## 実装上の境界
 
