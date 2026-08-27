@@ -36,6 +36,33 @@ interface Props {
   onPostsChange?: (posts: SocialDerivedPost[], response: SocialFetchResponse) => void;
 }
 
+type RecordView = 'regional' | 'national' | 'search';
+
+interface SocialSearchShortcut {
+  source: SocialSourceType;
+  category: SocialCategory;
+  query: string;
+  label: string;
+  locationAware?: boolean;
+}
+
+// ダミー投稿は置かず、各プラットフォームの実在する検索画面だけを案内する。
+const SOCIAL_SEARCH_SHORTCUTS: SocialSearchShortcut[] = [
+  { source: 'bluesky', category: 'cloud', query: KEYWORD_DICTIONARY.cloud[0], label: '地震雲', locationAware: true },
+  { source: 'bluesky', category: 'cloud', query: KEYWORD_DICTIONARY.cloud[1], label: '変な雲', locationAware: true },
+  { source: 'bluesky', category: 'sound', query: KEYWORD_DICTIONARY.sound[0], label: '地鳴り', locationAware: true },
+  { source: 'bluesky', category: 'animal', query: KEYWORD_DICTIONARY.animal[0], label: '犬が吠える', locationAware: true },
+  { source: 'bluesky', category: 'animal', query: KEYWORD_DICTIONARY.animal[3], label: '鳥が騒ぐ', locationAware: true },
+  { source: 'bluesky', category: 'shaking', query: KEYWORD_DICTIONARY.shaking[0], label: '揺れた気がする', locationAware: true },
+  { source: 'bluesky', category: 'water', query: KEYWORD_DICTIONARY.water[0], label: '井戸水が濁った', locationAware: true },
+  { source: 'mastodon', category: 'cloud', query: '地震雲', label: '#地震雲' },
+  { source: 'mastodon', category: 'sound', query: '地鳴り', label: '#地鳴り' },
+  { source: 'youtube', category: 'cloud', query: '地震 雲 観測', label: '雲の観測動画', locationAware: true },
+  { source: 'youtube', category: 'sound', query: '地鳴り 観測', label: '地鳴りの観測動画', locationAware: true },
+  { source: 'misskey', category: 'cloud', query: '地震雲', label: '地震雲', locationAware: true },
+  { source: 'misskey', category: 'sound', query: '地鳴り', label: '地鳴り', locationAware: true },
+];
+
 export const SocialObservationView: React.FC<Props> = ({
   selectedCell,
   allCells,
@@ -46,6 +73,7 @@ export const SocialObservationView: React.FC<Props> = ({
   const [selectedWindow, setSelectedWindow] = useState<'1h' | '6h' | '24h'>('6h');
   const [selectedCategory, setSelectedCategory] = useState<SocialCategory | 'all'>('all');
   const [selectedSource, setSelectedSource] = useState<SocialSourceType | 'all'>('all');
+  const [recordView, setRecordView] = useState<RecordView>('regional');
   const [postsList, setPostsList] = useState<SocialDerivedPost[]>(initialPosts);
   const [isLoadingLive, setIsLoadingLive] = useState<boolean>(false);
   const [liveFetchStatus, setLiveFetchStatus] = useState<string | null>(null);
@@ -133,13 +161,18 @@ export const SocialObservationView: React.FC<Props> = ({
       }
     : rawSummary;
 
-  const filteredPosts = postsList.filter(p => {
+  const windowedPosts = postsList.filter(p => {
     const windowHours = selectedWindow === '1h' ? 1 : selectedWindow === '6h' ? 6 : 24;
     if (new Date(p.postedAt).getTime() < Date.now() - windowHours * 60 * 60_000) return false;
-    // 地域不明投稿は地域集計には入れないが、全国参考レコードとして確認可能にする。
-    if (p.h3Cell !== selectedCell.id && p.h3Cell !== 'cell_unknown') return false;
     if (selectedCategory !== 'all' && p.category !== selectedCategory) return false;
     if (selectedSource !== 'all' && p.source !== selectedSource) return false;
+    return true;
+  });
+  const regionalPosts = windowedPosts.filter(p => p.h3Cell === selectedCell.id);
+  const visiblePosts = recordView === 'regional' ? regionalPosts : windowedPosts;
+  const visibleSearchShortcuts = SOCIAL_SEARCH_SHORTCUTS.filter(shortcut => {
+    if (selectedCategory !== 'all' && shortcut.category !== selectedCategory) return false;
+    if (selectedSource !== 'all' && shortcut.source !== selectedSource) return false;
     return true;
   });
 
@@ -440,21 +473,22 @@ export const SocialObservationView: React.FC<Props> = ({
 
       {/* 投稿例と元リンク確認 (7.5節 / 16.14節) */}
       <div className="bg-white dark:bg-slate-900 rounded-2xl p-5 border border-slate-200 dark:border-slate-800 shadow-sm space-y-4">
-        <div className="flex flex-col sm:flex-row items-start sm:items-center justify-between gap-2">
+        <div className="flex flex-col lg:flex-row items-start lg:items-center justify-between gap-3">
           <div>
             <h3 className="font-bold text-slate-900 dark:text-white text-sm flex items-center gap-2">
               <MessageSquare className="w-4 h-4 text-indigo-500" />
               構造化観測レコード（実在元リンク・検索URL連動）
             </h3>
             <p className="text-xs text-slate-400 mt-0.5">※各SNSの公開ポストまたは関連キーワード検索画面を直接新しいタブで開くことができます</p>
-            <p className="text-[11px] text-slate-400 mt-0.5">地域名のない投稿は地域別件数に加算せず、全国参考として一覧にのみ表示します</p>
+            <p className="text-[11px] text-slate-400 mt-0.5">地域名のない投稿は地域別件数に加算せず、「全国の取得投稿」にのみ表示します</p>
           </div>
 
           {/* フィルター */}
-          <div className="flex items-center gap-2">
+          <div className="flex flex-wrap items-center gap-2">
             <select
               value={selectedCategory}
-              onChange={(e) => setSelectedCategory(e.target.value as any)}
+              onChange={(e) => setSelectedCategory(e.target.value as SocialCategory | 'all')}
+              aria-label="観測カテゴリで絞り込む"
               className="text-xs bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-800 dark:text-slate-200"
             >
               <option value="all">すべてのカテゴリ</option>
@@ -462,12 +496,54 @@ export const SocialObservationView: React.FC<Props> = ({
               <option value="animal">動物・野鳥</option>
               <option value="sound">地鳴り・音</option>
               <option value="shaking">微振動</option>
+              <option value="water">水・井戸・温泉</option>
+              <option value="device">電子機器・磁気</option>
+            </select>
+            <select
+              value={selectedSource}
+              onChange={(e) => setSelectedSource(e.target.value as SocialSourceType | 'all')}
+              aria-label="SNSプラットフォームで絞り込む"
+              className="text-xs bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 rounded-lg px-2.5 py-1.5 text-slate-800 dark:text-slate-200"
+            >
+              <option value="all">すべてのSNS</option>
+              <option value="bluesky">Bluesky</option>
+              <option value="mastodon">Mastodon</option>
+              <option value="youtube">YouTube</option>
+              <option value="misskey">Misskey</option>
             </select>
           </div>
         </div>
 
-        <div className="divide-y divide-slate-100 dark:divide-slate-800">
-          {filteredPosts.map(post => {
+        <div
+          role="tablist"
+          aria-label="構造化観測レコードの表示範囲"
+          className="grid grid-cols-1 sm:grid-cols-3 gap-1 p-1 bg-slate-100 dark:bg-slate-800 rounded-xl"
+        >
+          {([
+            { id: 'regional' as const, label: '選択地域', count: regionalPosts.length },
+            { id: 'national' as const, label: '全国の取得投稿', count: windowedPosts.length },
+            { id: 'search' as const, label: '関連ワード検索', count: visibleSearchShortcuts.length },
+          ]).map(tab => (
+            <button
+              key={tab.id}
+              type="button"
+              role="tab"
+              aria-selected={recordView === tab.id}
+              onClick={() => setRecordView(tab.id)}
+              className={`px-3 py-2 rounded-lg text-xs font-semibold transition-colors ${
+                recordView === tab.id
+                  ? 'bg-white dark:bg-slate-700 text-indigo-700 dark:text-indigo-300 shadow-sm'
+                  : 'text-slate-600 dark:text-slate-400 hover:text-slate-900 dark:hover:text-white'
+              }`}
+            >
+              {tab.label} <span className="font-mono opacity-70">({tab.count})</span>
+            </button>
+          ))}
+        </div>
+
+        {recordView !== 'search' && (
+        <div role="tabpanel" className="divide-y divide-slate-100 dark:divide-slate-800">
+          {visiblePosts.map(post => {
             const meta = categoryLabels[post.category] || categoryLabels.unknown;
             const targetUrl = post.sourceUrl;
 
@@ -487,6 +563,11 @@ export const SocialObservationView: React.FC<Props> = ({
                     {post.placeName && (
                       <span className="text-xs font-medium text-slate-600 dark:text-slate-300 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-md">
                         📍 {post.placeName} (確度: {Math.round(post.placeConfidence * 100)}%)
+                      </span>
+                    )}
+                    {!post.placeName && (
+                      <span className="text-xs font-medium text-slate-500 bg-slate-100 dark:bg-slate-800 px-2 py-0.5 rounded-md">
+                        🇯🇵 地域不明・全国参考
                       </span>
                     )}
                   </div>
@@ -524,12 +605,84 @@ export const SocialObservationView: React.FC<Props> = ({
               </div>
             );
           })}
-          {!isLoadingLive && filteredPosts.length === 0 && (
+          {!isLoadingLive && visiblePosts.length === 0 && (
             <div className="py-10 text-center text-xs text-slate-500">
-              選択した地域・時間帯に、場所を明示した関連投稿はありません。
+              {recordView === 'regional'
+                ? `直近${selectedWindow}の${selectedCell.name}に、場所を明示した関連投稿はありません。「全国の取得投稿」も確認できます。`
+                : `直近${selectedWindow}に取得できた関連投稿はありません。「関連ワード検索」から各SNSを直接確認できます。`}
             </div>
           )}
         </div>
+        )}
+
+        {recordView === 'search' && (
+          <div role="tabpanel" className="space-y-3">
+            <div className="flex items-start gap-2 rounded-xl border border-sky-200 dark:border-sky-900 bg-sky-50 dark:bg-sky-950/30 px-3 py-2.5 text-[11px] text-sky-800 dark:text-sky-300">
+              <Search className="w-4 h-4 shrink-0 mt-0.5" />
+              <p>
+                Bluesky・YouTube・Misskeyは「{selectedCell.prefecture}」を加えた検索に連動します。Mastodonは公開ハッシュタグを直接開きます。これらの検索結果は異常度に自動加算しません。
+              </p>
+            </div>
+
+            <div className="grid grid-cols-1 sm:grid-cols-2 gap-2">
+              {visibleSearchShortcuts.map(shortcut => {
+                const query = shortcut.locationAware
+                  ? `${selectedCell.prefecture} ${shortcut.query}`
+                  : shortcut.query;
+                const targetUrl = buildSocialSearchUrl(shortcut.source, query);
+                const meta = categoryLabels[shortcut.category] || categoryLabels.unknown;
+
+                return (
+                  <div
+                    key={`${shortcut.source}:${shortcut.query}`}
+                    className="flex items-center justify-between gap-3 p-3 rounded-xl border border-slate-200 dark:border-slate-700 bg-slate-50 dark:bg-slate-800/50"
+                  >
+                    <div className="min-w-0 space-y-1">
+                      <div className="flex flex-wrap items-center gap-1.5">
+                        <span className="text-[10px] uppercase font-bold px-1.5 py-0.5 rounded bg-white dark:bg-slate-900 text-slate-500 border border-slate-200 dark:border-slate-700">
+                          {shortcut.source}
+                        </span>
+                        <span className={`text-[10px] font-bold px-2 py-0.5 rounded-full ${meta.color}`}>
+                          {meta.label}
+                        </span>
+                      </div>
+                      <p className="text-xs font-semibold text-slate-800 dark:text-slate-200 truncate">
+                        {shortcut.locationAware ? `${selectedCell.prefecture} + ` : ''}{shortcut.label}
+                      </p>
+                    </div>
+
+                    <div className="flex items-center gap-2 shrink-0">
+                      <button
+                        type="button"
+                        onClick={() => handleCopyLink(targetUrl)}
+                        title="検索URLをコピー"
+                        aria-label={`${shortcut.label}の検索URLをコピー`}
+                        className="p-1.5 rounded-lg border border-slate-200 dark:border-slate-700 hover:bg-white dark:hover:bg-slate-900 text-slate-500 transition-colors"
+                      >
+                        {copiedUrl === targetUrl ? <Check className="w-3.5 h-3.5 text-emerald-500" /> : <Copy className="w-3.5 h-3.5" />}
+                      </button>
+                      <a
+                        href={targetUrl}
+                        target="_blank"
+                        rel="noopener noreferrer"
+                        className="text-xs font-semibold text-indigo-600 dark:text-indigo-400 hover:underline flex items-center gap-1 bg-indigo-50 dark:bg-indigo-950/50 px-3 py-1.5 rounded-xl border border-indigo-200/60 dark:border-indigo-800/60 hover:bg-indigo-100 dark:hover:bg-indigo-900/50"
+                      >
+                        検索を開く
+                        <ExternalLink className="w-3.5 h-3.5" />
+                      </a>
+                    </div>
+                  </div>
+                );
+              })}
+            </div>
+
+            {visibleSearchShortcuts.length === 0 && (
+              <div className="py-8 text-center text-xs text-slate-500">
+                選択したカテゴリとSNSの組み合わせに対応する検索リンクはありません。
+              </div>
+            )}
+          </div>
+        )}
       </div>
     </div>
   );

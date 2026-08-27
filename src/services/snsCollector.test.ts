@@ -2,6 +2,7 @@ import assert from 'node:assert/strict';
 import test from 'node:test';
 import { SocialDerivedPost } from '../types';
 import {
+  buildSocialSearchUrl,
   classifyTextByRules,
   deduplicateSocialPosts,
   extractLocationFromText,
@@ -12,6 +13,26 @@ import {
   mastodonHtmlToText,
   normalizeBlueskyActor,
 } from './snsCollector';
+
+test('関連ワードを各SNSの実在検索URLへ安全に変換する', () => {
+  const regionalQuery = '東京都 地鳴り';
+  assert.equal(
+    buildSocialSearchUrl('bluesky', regionalQuery),
+    `https://bsky.app/search?q=${encodeURIComponent(regionalQuery)}`
+  );
+  assert.equal(
+    buildSocialSearchUrl('youtube', regionalQuery),
+    `https://www.youtube.com/results?search_query=${encodeURIComponent(regionalQuery)}`
+  );
+  assert.equal(
+    buildSocialSearchUrl('mastodon', '地震雲'),
+    `https://mstdn.jp/tags/${encodeURIComponent('地震雲')}`
+  );
+  assert.equal(
+    buildSocialSearchUrl('misskey', regionalQuery),
+    `https://misskey.io/search?q=${encodeURIComponent(regionalQuery)}`
+  );
+});
 
 test('Blueskyの公開actor入力を正規化しURLや検索式を拒否する', () => {
   assert.equal(normalizeBlueskyActor(' @Example.Bsky.Social '), 'example.bsky.social');
