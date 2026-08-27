@@ -1,4 +1,5 @@
 import React from 'react';
+import { useDialogAccessibility } from '../hooks/useDialogAccessibility';
 import { Shield, AlertTriangle, CheckCircle, Activity, Info, X } from 'lucide-react';
 
 interface Props {
@@ -7,13 +8,19 @@ interface Props {
 }
 
 export const OnboardingModal: React.FC<Props> = ({ isOpen, onClose }) => {
+  const dialogRef = useDialogAccessibility(onClose, false, isOpen);
   if (!isOpen) return null;
 
   return (
     <div className="fixed inset-0 z-50 flex items-center justify-center p-4 bg-slate-950/70 backdrop-blur-sm animate-fadeIn">
       <div
+        ref={dialogRef}
         id="onboarding-modal"
-        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-lg w-full p-6 sm:p-8 shadow-2xl space-y-6 text-slate-900 dark:text-white"
+        role="dialog"
+        aria-modal="true"
+        aria-labelledby="onboarding-title"
+        tabIndex={-1}
+        className="bg-white dark:bg-slate-900 border border-slate-200 dark:border-slate-800 rounded-3xl max-w-lg w-full p-6 sm:p-8 shadow-2xl space-y-6 text-slate-900 dark:text-white outline-none"
       >
         {/* Header Icon */}
         <div className="flex items-center gap-3">
@@ -21,7 +28,7 @@ export const OnboardingModal: React.FC<Props> = ({ isOpen, onClose }) => {
             <Activity className="w-6 h-6" />
           </div>
           <div>
-            <h2 className="text-xl font-bold tracking-tight">EarthSignal へようこそ</h2>
+            <h2 id="onboarding-title" className="text-xl font-bold tracking-tight">EarthSignal へようこそ</h2>
             <p className="text-xs text-slate-500 dark:text-slate-400">利用開始前の重要なお知らせ（要件定義書 v2.0 第0章）</p>
           </div>
         </div>

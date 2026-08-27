@@ -91,6 +91,7 @@ export interface SocialDerivedPost {
 export interface SocialFetchSourceStatus {
   source: SocialSourceType;
   ok: boolean;
+  degraded?: boolean;
   fetched: number;
   error?: string;
 }
@@ -100,6 +101,43 @@ export interface SocialFetchResponse {
   fetchedAt: string;
   isLive: boolean;
   sources: SocialFetchSourceStatus[];
+  error?: string;
+}
+
+export interface BlueskyPublicProfilePost {
+  uri: string;
+  url: string;
+  postedAt: string;
+  excerpt: string;
+  category: SocialCategory;
+}
+
+export interface BlueskyPublicProfileResponse {
+  profile: {
+    did: string;
+    handle: string;
+    displayName: string;
+    description: string;
+    avatar?: string;
+    followersCount: number;
+    followsCount: number;
+    postsCount: number;
+  };
+  scannedCount: number;
+  relevantPosts: BlueskyPublicProfilePost[];
+  fetchedAt: string;
+  notice: string;
+}
+
+export type RuntimeSourceKey = 'earthquake' | 'weather' | 'social';
+export interface RuntimeDataSourceStatus {
+  key: RuntimeSourceKey;
+  label: string;
+  state: 'loading' | 'live' | 'degraded';
+  fetchedAt?: string;
+  recordCount: number;
+  detail: string;
+  error?: string;
 }
 
 export interface SocialHourlySummary {

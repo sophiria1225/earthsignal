@@ -62,10 +62,10 @@ export const JapanCellMap: React.FC<Props> = ({
         <div>
           <h2 className="font-bold text-slate-900 dark:text-white text-lg flex items-center gap-2">
             <Layers className="w-5 h-5 text-indigo-600" />
-            全国地理セル観測マップ (H3解像度メッシュ)
+            代表8地域の統合観測マップ
           </h2>
           <p className="text-xs text-slate-500 dark:text-slate-400">
-            各地域の平常時基準値からの「観測異常度」を六角形セルで可視化しています。
+            現在対応している8地域の「観測異常度」を六角形セルで可視化しています。
           </p>
         </div>
 
@@ -214,6 +214,15 @@ export const JapanCellMap: React.FC<Props> = ({
                   <g
                     key={eq.id}
                     onClick={() => onOpenEarthquakeDetail(eq)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        onOpenEarthquakeDetail(eq);
+                      }
+                    }}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`${eq.hypocenterName} マグニチュード${mag.toFixed(1)}の地震詳細を開く`}
                     className="cursor-pointer group"
                   >
                     <circle
@@ -249,7 +258,7 @@ export const JapanCellMap: React.FC<Props> = ({
                 );
               })}
 
-              {/* H3風六角形地域セルポリゴン */}
+              {/* 代表地域を示す六角形セルポリゴン */}
               {cells.map((cell) => {
                 const { x, y } = cell.svgCoordinates;
                 const isSelected = selectedCell.id === cell.id;
@@ -266,8 +275,17 @@ export const JapanCellMap: React.FC<Props> = ({
                   <g
                     key={cell.id}
                     onClick={() => onSelectCell(cell)}
+                    onKeyDown={(event) => {
+                      if (event.key === 'Enter' || event.key === ' ') {
+                        event.preventDefault();
+                        onSelectCell(cell);
+                      }
+                    }}
                     onMouseEnter={() => setHoveredCell(cell)}
                     onMouseLeave={() => setHoveredCell(null)}
+                    role="button"
+                    tabIndex={0}
+                    aria-label={`${cell.name}を選択。${colorInfo.text}、異常度${colorInfo.value}`}
                     className="cursor-pointer transition-all duration-200"
                   >
                     {/* 選択中のグローリング */}
@@ -321,7 +339,7 @@ export const JapanCellMap: React.FC<Props> = ({
           {/* 下部情報バー */}
           <div className="flex items-center justify-between text-[11px] text-slate-400 bg-slate-950/60 p-2.5 rounded-xl border border-slate-800">
             <span>● 震源地マーカー: P2P地震情報 ({recentEarthquakes.length}件)</span>
-            <span>⬡ 六角形セル: 観測メッシュ ({cells.length}箇所)</span>
+            <span>⬡ 六角形セル: 対応地域 ({cells.length}箇所)</span>
           </div>
         </div>
 

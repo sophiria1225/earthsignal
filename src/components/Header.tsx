@@ -6,7 +6,7 @@ export type TabType = 'home' | 'map' | 'social' | 'record' | 'evaluation' | 'sta
 interface Props {
   activeTab: TabType;
   onSelectTab: (tab: TabType) => void;
-  isLiveFeed: boolean;
+  feedStatus: 'loading' | 'live' | 'degraded';
   isRefreshing: boolean;
   onRefresh: () => void;
   onOpenPrivacy: () => void;
@@ -16,7 +16,7 @@ interface Props {
 export const Header: React.FC<Props> = ({
   activeTab,
   onSelectTab,
-  isLiveFeed,
+  feedStatus,
   isRefreshing,
   onRefresh,
   onOpenPrivacy,
@@ -27,7 +27,7 @@ export const Header: React.FC<Props> = ({
       <div className="max-w-7xl mx-auto px-3 sm:px-6">
         <div className="flex items-center justify-between h-16 gap-2">
           {/* Logo & Brand */}
-          <div className="flex items-center gap-3 cursor-pointer" onClick={() => onSelectTab('home')}>
+          <button type="button" className="flex items-center gap-3 text-left" onClick={() => onSelectTab('home')} aria-label="EarthSignal ホームを開く">
             <div className="w-10 h-10 rounded-xl bg-gradient-to-br from-indigo-600 to-cyan-500 flex items-center justify-center text-white shadow-md shadow-indigo-500/20">
               <Activity className="w-5 h-5" />
             </div>
@@ -44,7 +44,7 @@ export const Header: React.FC<Props> = ({
                 地震関連情報と身の回りの変化を統合観測
               </p>
             </div>
-          </div>
+          </button>
 
           {/* Navigation Tabs (Desktop) */}
           <nav className="hidden lg:flex items-center gap-1 bg-slate-100/80 dark:bg-slate-800/80 p-1 rounded-xl border border-slate-200/60 dark:border-slate-700/60 text-sm">
@@ -138,8 +138,10 @@ export const Header: React.FC<Props> = ({
           <div className="flex items-center gap-2">
             {/* Live Feed Status Indicator */}
             <div className="hidden sm:flex items-center gap-1.5 text-xs px-2.5 py-1 rounded-full bg-slate-100 dark:bg-slate-800 border border-slate-200 dark:border-slate-700 text-slate-600 dark:text-slate-400">
-              <span className={`w-2 h-2 rounded-full ${isLiveFeed ? 'bg-emerald-500 animate-pulse' : 'bg-amber-500'}`} />
-              <span>{isLiveFeed ? 'P2P・気象連動中' : 'オフライン/キャッシュ'}</span>
+              <span className={`w-2 h-2 rounded-full ${
+                feedStatus === 'live' ? 'bg-emerald-500 animate-pulse' : feedStatus === 'loading' ? 'bg-indigo-500 animate-pulse' : 'bg-amber-500'
+              }`} />
+              <span>{feedStatus === 'live' ? '全データ連動中' : feedStatus === 'loading' ? 'データ更新中' : '一部データ低下'}</span>
             </div>
 
             {/* Refresh Button */}
@@ -147,6 +149,7 @@ export const Header: React.FC<Props> = ({
               id="header-refresh-btn"
               onClick={onRefresh}
               disabled={isRefreshing}
+              aria-label={isRefreshing ? 'データを更新中' : 'データを更新'}
               className="p-2 rounded-lg text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
               title="データを更新"
             >
@@ -168,6 +171,7 @@ export const Header: React.FC<Props> = ({
             <button
               id="header-privacy-btn"
               onClick={onOpenPrivacy}
+              aria-label="同意設定とプライバシーを開く"
               className="p-2 rounded-lg text-slate-600 dark:text-slate-400 hover:bg-slate-100 dark:hover:bg-slate-800 transition-colors"
               title="同意設定・プライバシー"
             >

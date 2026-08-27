@@ -1,5 +1,5 @@
 import React, { useState, useEffect } from 'react';
-import { GeoCell, SocialCategory, SocialDerivedPost, SocialFetchSourceStatus, SocialHourlySummary, SocialSourceType } from '../types';
+import { GeoCell, SocialCategory, SocialDerivedPost, SocialFetchResponse, SocialFetchSourceStatus, SocialHourlySummary, SocialSourceType } from '../types';
 import { 
   KEYWORD_DICTIONARY, 
   fetchLiveSocialPosts,
@@ -26,13 +26,14 @@ import {
   Copy,
   Check
 } from 'lucide-react';
+import { BlueskyPersonalFeed } from './BlueskyPersonalFeed';
 
 interface Props {
   selectedCell: GeoCell;
   allCells: GeoCell[];
   onSelectCell: (cell: GeoCell) => void;
   posts?: SocialDerivedPost[];
-  onPostsChange?: (posts: SocialDerivedPost[]) => void;
+  onPostsChange?: (posts: SocialDerivedPost[], response: SocialFetchResponse) => void;
 }
 
 export const SocialObservationView: React.FC<Props> = ({
@@ -74,12 +75,17 @@ export const SocialObservationView: React.FC<Props> = ({
     try {
       const result = await fetchLiveSocialPosts();
       setPostsList(result.posts);
-      onPostsChange?.(result.posts);
+      onPostsChange?.(result.posts, result);
       setSourceStatuses(result.sources);
 
       if (!isInitial) {
         const failed = result.sources.filter(source => !source.ok).map(source => source.source);
-        const suffix = failed.length > 0 ? `（${failed.join(', ')} は取得失敗）` : '';
+        const degraded = result.sources.filter(source => source.degraded).map(source => source.source);
+        const issueParts = [
+          failed.length > 0 ? `${failed.join(', ')} は取得失敗` : '',
+          degraded.length > 0 ? `${degraded.join(', ')} は一部検索失敗` : '',
+        ].filter(Boolean);
+        const suffix = issueParts.length > 0 ? `（${issueParts.join(' / ')}）` : '';
         setLiveFetchStatus(
           result.posts.length > 0
             ? `実在する公開投稿 ${result.posts.length} 件を取得しました${suffix}`
@@ -96,11 +102,18 @@ export const SocialObservationView: React.FC<Props> = ({
     }
   };
 
-  const summary: SocialHourlySummary = generateCellSocialSummary(
+  const rawSummary: SocialHourlySummary = generateCellSocialSummary(
     selectedCell.id,
     postsList,
     selectedWindow
   );
+  const summary: SocialHourlySummary = selectedWindow === '6h' && selectedCell.socialSummary
+    ? {
+        ...rawSummary,
+        anomalyScore: selectedCell.socialSummary.anomalyScore,
+        notice: selectedCell.socialSummary.notice,
+      }
+    : rawSummary;
 
   const filteredPosts = postsList.filter(p => {
     const windowHours = selectedWindow === '1h' ? 1 : selectedWindow === '6h' ? 6 : 24;
@@ -211,6 +224,8 @@ export const SocialObservationView: React.FC<Props> = ({
         </div>
       </div>
 
+      <BlueskyPersonalFeed />
+
       {/* コントロールバー */}
       <div className="bg-white dark:bg-slate-900 rounded-2xl p-4 border border-slate-200 dark:border-slate-800 shadow-sm flex flex-col sm:flex-row items-stretch sm:items-center justify-between gap-3">
         {/* 地域セレクター */}
@@ -281,12 +296,14 @@ export const SocialObservationView: React.FC<Props> = ({
               key={status.source}
               title={status.error}
               className={`px-2.5 py-1 rounded-full border ${
-                status.ok
+                status.ok && !status.degraded
                   ? 'bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-950/40 dark:border-emerald-800 dark:text-emerald-300'
+                  : status.ok
+                    ? 'bg-amber-50 border-amber-200 text-amber-700 dark:bg-amber-950/40 dark:border-amber-800 dark:text-amber-300'
                   : 'bg-rose-50 border-rose-200 text-rose-700 dark:bg-rose-950/40 dark:border-rose-800 dark:text-rose-300'
               }`}
             >
-              {status.source}: {status.ok ? `接続済み (${status.fetched}件)` : '取得失敗'}
+              {status.source}: {status.ok ? `${status.degraded ? '一部取得' : '接続済み'} (${status.fetched}件)` : '取得失敗'}
             </span>
           ))}
         </div>

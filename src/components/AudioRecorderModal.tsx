@@ -1,4 +1,5 @@
 import React, { useState, useRef, useEffect } from 'react';
+import { useDialogAccessibility } from '../hooks/useDialogAccessibility';
 import { GeoCell, Observation, AudioAnalysis } from '../types';
 import { analyzeAudioBuffer, classifyAudioFeatures } from '../services/audioAI';
 import { 
@@ -24,6 +25,7 @@ interface Props {
 }
 
 export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObservation }) => {
+  const dialogRef = useDialogAccessibility(onClose);
   const [recordingState, setRecordingState] = useState<'idle' | 'recording' | 'analyzing' | 'confirming' | 'completed'>('idle');
   const [recordedSeconds, setRecordedSeconds] = useState(0);
   const [audioLevel, setAudioLevel] = useState(0);
@@ -191,7 +193,7 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
 
   return (
     <div id="audio-recorder-modal" className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
-      <div className="bg-white dark:bg-slate-800 w-full max-w-xl rounded-2xl border border-slate-200 dark:border-slate-700 shadow-2xl overflow-hidden my-auto">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="audio-recorder-title" tabIndex={-1} className="bg-white dark:bg-slate-800 w-full max-w-xl rounded-2xl border border-slate-200 dark:border-slate-700 shadow-2xl overflow-hidden my-auto outline-none">
         
         {/* ヘッダー */}
         <div className="p-5 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between bg-slate-50 dark:bg-slate-900/50">
@@ -200,7 +202,7 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
               <Mic className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-bold text-slate-900 dark:text-white text-base">
+              <h3 id="audio-recorder-title" className="font-bold text-slate-900 dark:text-white text-base">
                 10秒音響観測
               </h3>
               <span className="text-xs text-slate-500">
@@ -210,6 +212,7 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
           </div>
           <button
             onClick={onClose}
+            aria-label="音響観測を閉じる"
             className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
           >
             <X className="w-5 h-5" />
@@ -250,7 +253,7 @@ export const AudioRecorderModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
                 <ul className="list-disc list-inside text-[11px] text-slate-500 dark:text-slate-400 space-y-1">
                   <li><strong>生音声はサーバーへ送信・保存せず</strong>、端末内解析後にアプリから参照を破棄します。</li>
                   <li>会話比率が高い音声は公衆公開を自動ブロックし、匿名集計のみに限定されます。</li>
-                  <li>公開位置は精密座標ではなく、地域セル（約5〜10km圏）の中心へ丸められます。</li>
+                  <li>精密座標は保存せず、選択した代表地域セルの中心座標だけを記録します。</li>
                 </ul>
               </div>
 

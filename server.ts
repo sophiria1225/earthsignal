@@ -5,9 +5,12 @@ import { createHash } from 'crypto';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
 import {
+  classifyTextByRules,
   deduplicateSocialPosts,
   fetchLiveBlueskyPosts,
   fetchLiveMastodonPosts,
+  normalizeBlueskyActor,
+  normalizeSocialText,
 } from './src/services/snsCollector';
 import { SocialDerivedPost, SocialFetchResponse, SocialSourceType } from './src/types';
 import {
@@ -29,6 +32,25 @@ const weatherCache = new Map<string, { expiresAt: number; response: WeatherFeedR
 let earthquakeInFlight: Promise<EarthquakeFeedResult> | null = null;
 const weatherInFlight = new Map<string, Promise<WeatherFeedResult>>();
 let blueskySession: { accessJwt: string; expiresAt: number } | null = null;
+const blueskyProfileCache = new Map<string, { expiresAt: number; response: unknown }>();
+
+async function fetchBlueskyPublicJson(url: URL): Promise<any> {
+  let lastStatus = 0;
+  for (let attempt = 0; attempt < 3; attempt += 1) {
+    const response = await fetch(url, {
+      headers: {
+        Accept: 'application/json',
+        'User-Agent': 'EarthSignal/1.0 (public-earth-observation-research)',
+      },
+      signal: AbortSignal.timeout(SOCIAL_REQUEST_TIMEOUT_MS),
+    });
+    if (response.ok) return response.json();
+    lastStatus = response.status;
+    if (![403, 429].includes(response.status) && response.status < 500) break;
+    if (attempt < 2) await new Promise(resolve => setTimeout(resolve, 500 * (attempt + 1)));
+  }
+  throw new Error(`Bluesky public API returned ${lastStatus || 'no response'}`);
+}
 
 async function getBlueskyAccessToken(): Promise<string | null> {
   const identifier = process.env.BLUESKY_IDENTIFIER?.trim();
@@ -81,6 +103,12 @@ async function startServer() {
 
   app.disable('x-powered-by');
   app.use(express.json({ limit: '64kb' }));
+  app.use((req, res, next) => {
+    res.setHeader('X-Content-Type-Options', 'nosniff');
+    res.setHeader('Referrer-Policy', 'strict-origin-when-cross-origin');
+    res.setHeader('Permissions-Policy', 'camera=(self), microphone=(self), geolocation=()');
+    next();
+  });
 
   const aiRateLimits = new Map<string, { count: number; resetsAt: number }>();
   app.use('/api/ai', (req, res, next) => {
@@ -182,6 +210,93 @@ async function startServer() {
       return res.json({ ...cached.response, isLive: false, error: result.error });
     }
     return res.json(result);
+  });
+
+  const blueskyProfileRateLimits = new Map<string, { count: number; resetsAt: number }>();
+  app.get('/api/social/bluesky/profile/:handle', async (req, res) => {
+    const handle = normalizeBlueskyActor(req.params.handle);
+    if (!handle) {
+      return res.status(400).json({ error: 'Blueskyハンドルの形式が正しくありません' });
+    }
+    const requestKey = req.ip || req.socket.remoteAddress || 'unknown';
+    const now = Date.now();
+    const currentLimit = blueskyProfileRateLimits.get(requestKey);
+    const limitState = !currentLimit || currentLimit.resetsAt <= now
+      ? { count: 0, resetsAt: now + 10 * 60_000 }
+      : currentLimit;
+    limitState.count += 1;
+    blueskyProfileRateLimits.set(requestKey, limitState);
+    res.setHeader('X-RateLimit-Limit', '20');
+    res.setHeader('X-RateLimit-Remaining', String(Math.max(0, 20 - limitState.count)));
+    if (limitState.count > 20) {
+      return res.status(429).json({ error: '公開プロフィールの取得回数が上限に達しました。しばらくしてから再試行してください。' });
+    }
+    const cached = blueskyProfileCache.get(handle);
+    if (cached && cached.expiresAt > Date.now()) {
+      res.setHeader('X-EarthSignal-Cache', 'HIT');
+      return res.json(cached.response);
+    }
+
+    try {
+      const profileUrl = new URL('https://api.bsky.app/xrpc/app.bsky.actor.getProfile');
+      profileUrl.searchParams.set('actor', handle);
+      const feedUrl = new URL('https://api.bsky.app/xrpc/app.bsky.feed.getAuthorFeed');
+      feedUrl.searchParams.set('actor', handle);
+      feedUrl.searchParams.set('limit', '100');
+      feedUrl.searchParams.set('filter', 'posts_no_replies');
+      const [profile, feed] = await Promise.all([
+        fetchBlueskyPublicJson(profileUrl),
+        fetchBlueskyPublicJson(feedUrl),
+      ]);
+
+      const cutoff = Date.now() - 30 * 24 * 60 * 60_000;
+      const relevantPosts = (Array.isArray(feed.feed) ? feed.feed : [])
+        .map((item: any) => item.post)
+        .filter((post: any) => post?.record?.text && Date.parse(post.record.createdAt) >= cutoff)
+        .map((post: any) => {
+          const text = normalizeSocialText(post.record.text);
+          const classification = classifyTextByRules(text);
+          const rkey = String(post.uri || '').split('/').at(-1);
+          return {
+            uri: post.uri,
+            url: rkey ? `https://bsky.app/profile/${post.author?.handle || handle}/post/${rkey}` : `https://bsky.app/profile/${handle}`,
+            postedAt: post.record.createdAt,
+            excerpt: text.slice(0, 300),
+            category: classification.category,
+            excluded: classification.category === 'unknown'
+              || classification.category === 'unrelated'
+              || classification.isOfficialReaction,
+          };
+        })
+        .filter((post: any) => !post.excluded)
+        .slice(0, 30);
+      const response = {
+        profile: {
+          did: profile.did,
+          handle: profile.handle,
+          displayName: profile.displayName || profile.handle,
+          description: normalizeSocialText(profile.description || '').slice(0, 300),
+          avatar: typeof profile.avatar === 'string' && profile.avatar.startsWith('https://') ? profile.avatar : undefined,
+          followersCount: Number(profile.followersCount) || 0,
+          followsCount: Number(profile.followsCount) || 0,
+          postsCount: Number(profile.postsCount) || 0,
+        },
+        scannedCount: Math.min(100, Array.isArray(feed.feed) ? feed.feed.length : 0),
+        relevantPosts,
+        fetchedAt: new Date().toISOString(),
+        notice: '公開投稿だけを取得します。サーバーでは5分間だけキャッシュし、ハンドルや本文をEarthSignalの端末履歴へ保存しません。',
+      };
+      if (blueskyProfileCache.size >= 100) {
+        const oldestKey = blueskyProfileCache.keys().next().value;
+        if (oldestKey) blueskyProfileCache.delete(oldestKey);
+      }
+      blueskyProfileCache.set(handle, { expiresAt: Date.now() + 5 * 60_000, response });
+      res.setHeader('Cache-Control', 'private, max-age=60');
+      return res.json(response);
+    } catch (error) {
+      const message = error instanceof Error ? error.message : 'Bluesky公開プロフィールを取得できません';
+      return res.status(message.includes('404') ? 404 : 502).json({ error: message });
+    }
   });
 
   // 4. Public SNS collection. External APIs are called server-side to avoid CORS
@@ -303,6 +418,7 @@ async function startServer() {
       return {
         source,
         ok: state.successes > 0,
+        degraded: state.successes > 0 && state.errors.length > 0,
         fetched: protectedPosts.filter(post => post.source === source).length,
         error: state.errors.length > 0 ? [...new Set(state.errors)].join(' / ') : undefined,
       };

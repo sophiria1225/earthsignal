@@ -1,4 +1,5 @@
 import React from 'react';
+import { useDialogAccessibility } from '../hooks/useDialogAccessibility';
 import { Earthquake } from '../types';
 import { X, Activity, AlertTriangle, ShieldCheck, MapPin, ExternalLink, Clock } from 'lucide-react';
 
@@ -8,11 +9,12 @@ interface Props {
 }
 
 export const EarthquakeDetailModal: React.FC<Props> = ({ earthquake, onClose }) => {
+  const dialogRef = useDialogAccessibility(onClose);
   if (!earthquake) return null;
 
   return (
     <div id="earthquake-detail-modal" className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
-      <div className="bg-white dark:bg-slate-800 w-full max-w-lg rounded-2xl border border-slate-200 dark:border-slate-700 shadow-2xl overflow-hidden my-auto">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="earthquake-detail-title" tabIndex={-1} className="bg-white dark:bg-slate-800 w-full max-w-lg rounded-2xl border border-slate-200 dark:border-slate-700 shadow-2xl overflow-hidden my-auto outline-none">
         
         {/* ヘッダー */}
         <div className="p-5 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between bg-slate-50 dark:bg-slate-900/50">
@@ -21,7 +23,7 @@ export const EarthquakeDetailModal: React.FC<Props> = ({ earthquake, onClose }) 
               <Activity className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-bold text-slate-900 dark:text-white text-base">
+              <h3 id="earthquake-detail-title" className="font-bold text-slate-900 dark:text-white text-base">
                 公式地震情報 詳細
               </h3>
               <span className="text-xs text-slate-500">
@@ -31,6 +33,7 @@ export const EarthquakeDetailModal: React.FC<Props> = ({ earthquake, onClose }) 
           </div>
           <button
             onClick={onClose}
+            aria-label="地震情報の詳細を閉じる"
             className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
           >
             <X className="w-5 h-5" />

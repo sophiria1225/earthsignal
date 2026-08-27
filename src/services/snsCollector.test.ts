@@ -8,7 +8,14 @@ import {
   generateCellSocialSummary,
   fetchLiveBlueskyPosts,
   mastodonHtmlToText,
+  normalizeBlueskyActor,
 } from './snsCollector';
+
+test('Blueskyの公開actor入力を正規化しURLや検索式を拒否する', () => {
+  assert.equal(normalizeBlueskyActor(' @Example.Bsky.Social '), 'example.bsky.social');
+  assert.equal(normalizeBlueskyActor('https://bsky.app/profile/example.bsky.social'), null);
+  assert.equal(normalizeBlueskyActor('地震雲 OR 地鳴り'), null);
+});
 
 test('Bluesky V2検索は一時的な403を再試行する', async () => {
   const originalFetch = globalThis.fetch;
@@ -69,6 +76,12 @@ test('場所が書かれていない投稿を東京へ誤分類しない', () =>
 test('過去談や否定文を観測投稿から除外する', () => {
   assert.equal(classifyTextByRules('数日前に地震雲を見た').category, 'unrelated');
   assert.equal(classifyTextByRules('地震雲に科学的根拠は無い').category, 'unrelated');
+});
+
+test('原因が雷と分かる音や比喩表現を観測投稿から除外する', () => {
+  assert.equal(classifyTextByRules('地鳴りみたいな雷が鳴っている').category, 'unrelated');
+  assert.equal(classifyTextByRules('ライブ会場が地鳴りのような歓声だった').category, 'unrelated');
+  assert.equal(classifyTextByRules('東京で原因不明の地鳴りが続いている').category, 'sound');
 });
 
 test('Mastodon HTMLを安全なプレーンテキストへ変換する', () => {

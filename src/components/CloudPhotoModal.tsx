@@ -1,4 +1,5 @@
 import React, { useState, useRef } from 'react';
+import { useDialogAccessibility } from '../hooks/useDialogAccessibility';
 import { GeoCell, Observation, CloudAnalysis } from '../types';
 import { analyzeCloudImage } from '../services/cloudAI';
 import { 
@@ -20,6 +21,7 @@ interface Props {
 }
 
 export const CloudPhotoModal: React.FC<Props> = ({ cell, onClose, onSubmitObservation }) => {
+  const dialogRef = useDialogAccessibility(onClose);
   const [selectedFile, setSelectedFile] = useState<File | null>(null);
   const [previewUrl, setPreviewUrl] = useState<string | null>(null);
   const [userShapeHint, setUserShapeHint] = useState<string>('other');
@@ -94,7 +96,7 @@ export const CloudPhotoModal: React.FC<Props> = ({ cell, onClose, onSubmitObserv
 
   return (
     <div id="cloud-photo-modal" className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
-      <div className="bg-white dark:bg-slate-800 w-full max-w-xl rounded-2xl border border-slate-200 dark:border-slate-700 shadow-2xl overflow-hidden my-auto max-h-[90vh] flex flex-col">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="cloud-photo-title" tabIndex={-1} className="bg-white dark:bg-slate-800 w-full max-w-xl rounded-2xl border border-slate-200 dark:border-slate-700 shadow-2xl overflow-hidden my-auto max-h-[90vh] flex flex-col outline-none">
         
         {/* ヘッダー */}
         <div className="p-5 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between bg-slate-50 dark:bg-slate-900/50">
@@ -103,7 +105,7 @@ export const CloudPhotoModal: React.FC<Props> = ({ cell, onClose, onSubmitObserv
               <Camera className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-bold text-slate-900 dark:text-white text-base">
+              <h3 id="cloud-photo-title" className="font-bold text-slate-900 dark:text-white text-base">
                 雲写真の撮影・解析
               </h3>
               <span className="text-xs text-slate-500">
@@ -113,6 +115,7 @@ export const CloudPhotoModal: React.FC<Props> = ({ cell, onClose, onSubmitObserv
           </div>
           <button
             onClick={onClose}
+            aria-label="雲写真の記録を閉じる"
             className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
           >
             <X className="w-5 h-5" />
@@ -128,6 +131,15 @@ export const CloudPhotoModal: React.FC<Props> = ({ cell, onClose, onSubmitObserv
               {!previewUrl ? (
                 <div
                   onClick={() => fileInputRef.current?.click()}
+                  onKeyDown={(event) => {
+                    if (event.key === 'Enter' || event.key === ' ') {
+                      event.preventDefault();
+                      fileInputRef.current?.click();
+                    }
+                  }}
+                  role="button"
+                  tabIndex={0}
+                  aria-label="解析する雲の写真を選択"
                   className="border-2 border-dashed border-slate-300 dark:border-slate-700 hover:border-cyan-500 dark:hover:border-cyan-400 rounded-2xl p-8 text-center cursor-pointer bg-slate-50 dark:bg-slate-900/40 transition-colors space-y-3"
                 >
                   <div className="w-14 h-14 mx-auto rounded-full bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 flex items-center justify-center">
@@ -154,12 +166,14 @@ export const CloudPhotoModal: React.FC<Props> = ({ cell, onClose, onSubmitObserv
                   <div className="relative rounded-xl overflow-hidden max-h-56 bg-black flex items-center justify-center">
                     <img src={previewUrl} alt="Cloud Preview" className="max-h-56 object-contain" />
                     <button
+                      type="button"
                       onClick={() => {
                         setSelectedFile(null);
                         setPreviewUrl(null);
                         setAnalysisResult(null);
                       }}
                       className="absolute top-2 right-2 p-1.5 rounded-full bg-black/60 text-white hover:bg-black/80"
+                      aria-label="選択した写真を取り消す"
                     >
                       <X className="w-4 h-4" />
                     </button>

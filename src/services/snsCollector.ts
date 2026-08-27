@@ -23,6 +23,8 @@ export const KEYWORD_DICTIONARY: Record<SocialCategory, string[]> = {
 const NEGATION_REGEX = /(ない|無い|なかった|ではない|違う|デマ|無関係|根拠.{0,5}(ない|無い)|迷信|嘘|勘違い|嘘っぽい)/i;
 const HISTORICAL_REGEX = /(昔|先日|数日前|この前|去年|昨年|\d+[日週ヶか月年]前|過去|思い出|東日本大震災の時|あの時)/i;
 const QUOTATION_REGEX = /(ニュース|記事|引用|リポスト|RT|転載|報道|まとめ)/i;
+const METAPHOR_CONTEXT_REGEX = /(ゲーム|漫画|アニメ|小説|映画|ライブ|コンサート|スタジアム|歓声|観客|喘ぎ|創作|二次創作)/i;
+const KNOWN_SOUND_SOURCE_REGEX = /(雷|落雷|花火|工事|解体|発破|飛行機|戦闘機|ヘリ|電車|列車|トラック|自衛隊|スピーカー|掃除機|洗濯機)/i;
 
 function stableTextId(value: string): string {
   let hash = 2166136261;
@@ -82,6 +84,17 @@ export function normalizeSocialText(input: string): string {
 }
 
 /**
+ * Bluesky の公開 actor 指定に使える handle / DID だけを受け付ける。
+ * URLや検索式を許可しないことで、サーバーを任意URL取得に利用できないようにする。
+ */
+export function normalizeBlueskyActor(input: string): string | null {
+  const actor = input.trim().replace(/^@/, '').toLowerCase();
+  return /^(?:did:plc:[a-z2-7]{20,64}|[a-z0-9](?:[a-z0-9.-]{1,251}[a-z0-9])?)$/.test(actor)
+    ? actor
+    : null;
+}
+
+/**
  * テキストから現象カテゴリをルールベース判定
  */
 export function classifyTextByRules(text: string): {
@@ -101,13 +114,15 @@ export function classifyTextByRules(text: string): {
   // 2. 過去談・比喩判定
   const isHistorical = HISTORICAL_REGEX.test(norm);
   const isNegated = NEGATION_REGEX.test(norm);
+  const isMetaphorical = METAPHOR_CONTEXT_REGEX.test(norm);
 
   // 3. カテゴリマッチング
   for (const cat of ['cloud', 'animal', 'sound', 'shaking', 'water', 'device'] as SocialCategory[]) {
     const keywords = KEYWORD_DICTIONARY[cat];
     const matched = keywords.some(k => norm.includes(k));
     if (matched) {
-      if (isHistorical || isNegated) {
+      const hasKnownCause = (cat === 'sound' || cat === 'shaking') && KNOWN_SOUND_SOURCE_REGEX.test(norm);
+      if (isHistorical || isNegated || isMetaphorical || hasKnownCause) {
         return { category: 'unrelated', confidence: 0.85, isNegated, isHistorical, isOfficialReaction: false };
       }
       return { category: cat, confidence: 0.85, isNegated: false, isHistorical: false, isOfficialReaction: false };

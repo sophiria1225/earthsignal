@@ -4,11 +4,20 @@
  */
 
 import React, { useState, useEffect } from 'react';
-import { GeoCell, Earthquake, Observation, SocialDerivedPost } from './types';
+import { GeoCell, Earthquake, Observation, RuntimeDataSourceStatus, SocialDerivedPost } from './types';
 import { createRuntimeGeoCells } from './services/dataStore';
 import { fetchP2PEarthquakes, fetchOpenMeteoWeather } from './services/externalFeeds';
 import { calculateRobustAnomalyScore } from './services/anomalyEngine';
 import { fetchLiveSocialPosts, generateCellSocialSummary } from './services/snsCollector';
+import {
+  ObservationSnapshot,
+  applySocialBaseline,
+  createObservationSnapshots,
+  deriveSocialBaseline,
+  loadObservationHistory,
+  mergeObservationSnapshots,
+  saveObservationHistory,
+} from './services/observationHistory';
 import { Header, TabType } from './components/Header';
 import { HomeDashboard } from './components/HomeDashboard';
 import { JapanCellMap } from './components/JapanCellMap';
@@ -21,6 +30,7 @@ import { ResearchInfoView } from './components/ResearchInfoView';
 import { SocialObservationView } from './components/SocialObservationView';
 import { FreeTierStatusView } from './components/FreeTierStatusView';
 import { OnboardingModal } from './components/OnboardingModal';
+import { LocalDataManager } from './components/LocalDataManager';
 
 const PostEventVerificationView = React.lazy(() =>
   import('./components/PostEventVerificationView').then(module => ({
@@ -35,6 +45,7 @@ export default function App() {
   const [selectedCell, setSelectedCell] = useState<GeoCell>(initialCells[0]);
   const [earthquakes, setEarthquakes] = useState<Earthquake[]>([]);
   const [socialPosts, setSocialPosts] = useState<SocialDerivedPost[]>([]);
+  const [observationHistory, setObservationHistory] = useState<ObservationSnapshot[]>(loadObservationHistory);
   const [observations, setObservations] = useState<Observation[]>(() => {
     try {
       const stored = JSON.parse(localStorage.getItem('earthsignal_observations_v1') || '[]');
@@ -44,7 +55,11 @@ export default function App() {
     }
   });
   const [isRefreshing, setIsRefreshing] = useState<boolean>(false);
-  const [liveSources, setLiveSources] = useState({ earthquake: false, weather: false, social: false });
+  const [sourceStatuses, setSourceStatuses] = useState<RuntimeDataSourceStatus[]>([
+    { key: 'earthquake', label: '地震', state: 'loading', recordCount: 0, detail: '取得待ち' },
+    { key: 'weather', label: '気象', state: 'loading', recordCount: 0, detail: '取得待ち' },
+    { key: 'social', label: 'SNS', state: 'loading', recordCount: 0, detail: '取得待ち' },
+  ]);
   const [showOnboarding, setShowOnboarding] = useState<boolean>(false);
 
   // モーダル管理
@@ -54,39 +69,73 @@ export default function App() {
 
   // オンボーディング同意チェック
   useEffect(() => {
-    const hasAgreed = localStorage.getItem('earthsignal_onboarded_v2');
+    let hasAgreed: string | null = null;
+    try {
+      hasAgreed = localStorage.getItem('earthsignal_onboarded_v2');
+    } catch {
+      // ストレージ無効時は毎回注意事項を表示する。
+    }
     if (!hasAgreed) {
       setShowOnboarding(true);
     }
   }, []);
 
   const handleCloseOnboarding = () => {
-    localStorage.setItem('earthsignal_onboarded_v2', 'true');
+    try {
+      localStorage.setItem('earthsignal_onboarded_v2', 'true');
+    } catch {
+      // プライベートブラウズ等でも同意後の利用自体は継続できる。
+    }
     setShowOnboarding(false);
   };
 
   useEffect(() => {
-    localStorage.setItem('earthsignal_observations_v1', JSON.stringify(observations.slice(0, 200)));
+    try {
+      localStorage.setItem('earthsignal_observations_v1', JSON.stringify(observations.slice(0, 200)));
+    } catch {
+      // 保存容量不足でも現在セッションの観測は保持する。
+    }
   }, [observations]);
+
+  useEffect(() => {
+    saveObservationHistory(observationHistory);
+  }, [observationHistory]);
 
   // セル配列更新後も、選択中セルが古いオブジェクトを参照しないよう同期する。
   useEffect(() => {
     const latest = cells.find(cell => cell.id === selectedCell.id);
     if (latest && latest !== selectedCell) setSelectedCell(latest);
-  }, [cells, selectedCell.id]);
+    if (selectedCellForDetail) {
+      const latestDetail = cells.find(cell => cell.id === selectedCellForDetail.id);
+      if (latestDetail && latestDetail !== selectedCellForDetail) setSelectedCellForDetail(latestDetail);
+    }
+  }, [cells, selectedCell.id, selectedCellForDetail?.id]);
 
   // データ更新関数
   const refreshData = async () => {
     setIsRefreshing(true);
+    setSourceStatuses(current => current.map(source => ({ ...source, state: 'loading', detail: '更新中', error: undefined })));
     try {
       const earthquakePromise = fetchP2PEarthquakes()
-        .catch(() => ({ earthquakes: [], isLive: false, fetchedAt: new Date().toISOString() }));
+        .catch((error: unknown) => ({
+          earthquakes: [],
+          isLive: false,
+          fetchedAt: new Date().toISOString(),
+          error: error instanceof Error ? error.message : '地震情報の取得に失敗',
+        }));
       const socialPromise = fetchLiveSocialPosts()
-        .catch(() => ({ posts: [], isLive: false, fetchedAt: new Date().toISOString(), sources: [] }));
-      const weatherPromise = Promise.all(cells.map(cell => fetchOpenMeteoWeather(cell.id).catch(() => ({
+        .catch((error: unknown) => ({
+          posts: [],
+          isLive: false,
+          fetchedAt: new Date().toISOString(),
+          sources: [],
+          error: error instanceof Error ? error.message : 'SNSの取得に失敗',
+        }));
+      const weatherPromise = Promise.all(cells.map(cell => fetchOpenMeteoWeather(cell.id).catch((error: unknown) => ({
         weather: null,
         isLive: false,
         fetchedAt: new Date().toISOString(),
+        error: error instanceof Error ? error.message : '気象情報の取得に失敗',
       }))));
       const [earthquakeResult, socialResult, weatherResults] = await Promise.all([
         earthquakePromise,
@@ -94,33 +143,76 @@ export default function App() {
         weatherPromise,
       ]);
 
-      const freshEarthquakes = earthquakeResult.earthquakes;
-      const freshSocialPosts = socialResult.posts;
+      const freshEarthquakes = earthquakeResult.isLive || earthquakeResult.earthquakes.length > 0
+        ? earthquakeResult.earthquakes
+        : earthquakes;
+      const freshSocialPosts = socialResult.isLive || socialResult.posts.length > 0
+        ? socialResult.posts
+        : socialPosts;
+      const capturedAt = new Date();
       setEarthquakes(freshEarthquakes);
       setSocialPosts(freshSocialPosts);
-      setLiveSources({
-        earthquake: earthquakeResult.isLive,
-        weather: weatherResults.some(result => result.isLive),
-        social: socialResult.isLive,
-      });
+      const liveWeatherCount = weatherResults.filter(result => result.isLive).length;
+      const socialFailures = socialResult.sources.filter(source => !source.ok || source.degraded);
+      setSourceStatuses([
+        {
+          key: 'earthquake',
+          label: '地震',
+          state: earthquakeResult.isLive ? 'live' : 'degraded',
+          fetchedAt: earthquakeResult.fetchedAt,
+          recordCount: freshEarthquakes.length,
+          detail: earthquakeResult.isLive ? `P2P地震情報 ${freshEarthquakes.length}件` : '取得停止中',
+          error: earthquakeResult.error,
+        },
+        {
+          key: 'weather',
+          label: '気象',
+          state: liveWeatherCount === cells.length ? 'live' : 'degraded',
+          fetchedAt: weatherResults.find(result => result.isLive)?.fetchedAt,
+          recordCount: liveWeatherCount,
+          detail: `Open-Meteo ${liveWeatherCount}/${cells.length}地域`,
+          error: weatherResults.find(result => !result.isLive)?.error,
+        },
+        {
+          key: 'social',
+          label: 'SNS',
+          state: socialResult.isLive && socialFailures.length === 0 ? 'live' : 'degraded',
+          fetchedAt: socialResult.fetchedAt,
+          recordCount: freshSocialPosts.length,
+          detail: socialResult.isLive
+            ? `公開投稿 ${freshSocialPosts.length}件${socialFailures.length ? ` / ${socialFailures.map(source => source.source).join('・')}低下` : ''}`
+            : '取得停止中',
+          error: socialResult.error || socialFailures.map(source => `${source.source}: ${source.error || '取得失敗'}`).join(' / ') || undefined,
+        },
+      ]);
 
-      setCells(prev => prev.map((cell, index) => {
-        const weatherResult = weatherResults[index];
-        const weather = weatherResult?.weather || { ...cell.weather, isStale: true };
-        const socialSummary = generateCellSocialSummary(cell.id, freshSocialPosts, '6h');
-        const updated = { ...cell, weather, socialSummary };
-        const currentScore = calculateRobustAnomalyScore(
-          updated,
-          observations.filter(observation => observation.cellId === cell.id),
-          freshEarthquakes,
-          socialSummary.anomalyScore
-        );
-        return {
-          ...updated,
-          recentObservationsCount: observations.filter(observation => observation.cellId === cell.id).length,
-          currentScore,
-        };
-      }));
+      const updatedCells = cells.map((cell, index) => {
+          const weatherResult = weatherResults[index];
+          const weather = weatherResult?.weather || { ...cell.weather, isStale: true };
+          const rawSocialSummary = generateCellSocialSummary(cell.id, freshSocialPosts, '6h');
+          const socialSummary = applySocialBaseline(
+            rawSocialSummary,
+            deriveSocialBaseline(cell.id, rawSocialSummary.totalPosts, observationHistory, capturedAt)
+          );
+          const updated = { ...cell, weather, socialSummary };
+          const currentScore = calculateRobustAnomalyScore(
+            updated,
+            observations.filter(observation => observation.cellId === cell.id),
+            freshEarthquakes,
+            socialSummary.anomalyScore
+          );
+          return {
+            ...updated,
+            recentObservationsCount: observations.filter(observation => observation.cellId === cell.id).length,
+            currentScore,
+          };
+      });
+      setCells(updatedCells);
+      setObservationHistory(current => mergeObservationSnapshots(
+        current,
+        createObservationSnapshots(updatedCells, capturedAt, { socialLive: socialResult.isLive }),
+        capturedAt
+      ));
     } finally {
       setIsRefreshing(false);
     }
@@ -165,7 +257,9 @@ export default function App() {
       <Header
         activeTab={activeTab}
         onSelectTab={setActiveTab}
-        isLiveFeed={liveSources.earthquake && liveSources.weather}
+        feedStatus={sourceStatuses.some(source => source.state === 'loading')
+          ? 'loading'
+          : sourceStatuses.every(source => source.state === 'live') ? 'live' : 'degraded'}
         isRefreshing={isRefreshing}
         onRefresh={refreshData}
         onOpenPrivacy={() => setShowOnboarding(true)}
@@ -193,6 +287,7 @@ export default function App() {
             onNavigateToSocial={() => setActiveTab('social')}
             onNavigateToStatus={() => setActiveTab('status')}
             onOpenExplanationModal={(cell) => setSelectedCellForDetail(cell)}
+            sourceStatuses={sourceStatuses}
           />
         )}
 
@@ -217,12 +312,25 @@ export default function App() {
               allCells={cells}
               onSelectCell={handleSelectCell}
               posts={socialPosts}
-              onPostsChange={(posts) => {
+              onPostsChange={(posts, result) => {
+                const capturedAt = new Date();
                 setSocialPosts(posts);
-                setLiveSources(current => ({ ...current, social: true }));
-                setCells(prev => prev.map(cell => {
-                  const socialSummary = generateCellSocialSummary(cell.id, posts, '6h');
-                  return {
+                const failed = result.sources.filter(source => !source.ok || source.degraded);
+                setSourceStatuses(current => current.map(source => source.key === 'social' ? {
+                  ...source,
+                  state: result.isLive && failed.length === 0 ? 'live' : 'degraded',
+                  fetchedAt: result.fetchedAt,
+                  recordCount: result.posts.length,
+                  detail: `公開投稿 ${result.posts.length}件${failed.length ? ` / ${failed.map(item => item.source).join('・')}低下` : ''}`,
+                  error: failed.map(item => `${item.source}: ${item.error || '取得失敗'}`).join(' / ') || undefined,
+                } : source));
+                const updatedCells = cells.map(cell => {
+                    const rawSocialSummary = generateCellSocialSummary(cell.id, posts, '6h');
+                    const socialSummary = applySocialBaseline(
+                      rawSocialSummary,
+                      deriveSocialBaseline(cell.id, rawSocialSummary.totalPosts, observationHistory, capturedAt)
+                    );
+                    return {
                     ...cell,
                     socialSummary,
                     currentScore: calculateRobustAnomalyScore(
@@ -232,7 +340,13 @@ export default function App() {
                       socialSummary.anomalyScore
                     ),
                   };
-                }));
+                });
+                setCells(updatedCells);
+                setObservationHistory(current => mergeObservationSnapshots(
+                  current,
+                  createObservationSnapshots(updatedCells, capturedAt, { socialLive: true }),
+                  capturedAt
+                ));
               }}
             />
           </div>
@@ -250,9 +364,10 @@ export default function App() {
             </div>
 
             <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
-              <div
+              <button
+                type="button"
                 onClick={() => setActiveRecordModal('audio')}
-                className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 hover:border-indigo-500 cursor-pointer shadow-sm space-y-3 transition-all"
+                className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 hover:border-indigo-500 cursor-pointer shadow-sm space-y-3 transition-all text-left"
               >
                 <div className="w-12 h-12 rounded-xl bg-indigo-500/10 text-indigo-600 flex items-center justify-center font-bold text-lg">
                   🎙️
@@ -264,11 +379,12 @@ export default function App() {
                 <span className="text-xs font-bold text-indigo-600 dark:text-indigo-400 block pt-2">
                   マイクで録音を開始 →
                 </span>
-              </div>
+              </button>
 
-              <div
+              <button
+                type="button"
                 onClick={() => setActiveRecordModal('cloud')}
-                className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 hover:border-cyan-500 cursor-pointer shadow-sm space-y-3 transition-all"
+                className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 hover:border-cyan-500 cursor-pointer shadow-sm space-y-3 transition-all text-left"
               >
                 <div className="w-12 h-12 rounded-xl bg-cyan-500/10 text-cyan-600 flex items-center justify-center font-bold text-lg">
                   ☁️
@@ -280,11 +396,12 @@ export default function App() {
                 <span className="text-xs font-bold text-cyan-600 dark:text-cyan-400 block pt-2">
                   写真を投稿する →
                 </span>
-              </div>
+              </button>
 
-              <div
+              <button
+                type="button"
                 onClick={() => setActiveRecordModal('report')}
-                className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 hover:border-emerald-500 cursor-pointer shadow-sm space-y-3 transition-all"
+                className="bg-white dark:bg-slate-800 p-6 rounded-2xl border border-slate-200 dark:border-slate-700 hover:border-emerald-500 cursor-pointer shadow-sm space-y-3 transition-all text-left"
               >
                 <div className="w-12 h-12 rounded-xl bg-emerald-500/10 text-emerald-600 flex items-center justify-center font-bold text-lg">
                   📝
@@ -296,8 +413,15 @@ export default function App() {
                 <span className="text-xs font-bold text-emerald-600 dark:text-emerald-400 block pt-2">
                   レポートを入力 →
                 </span>
-              </div>
+              </button>
             </div>
+
+            <LocalDataManager
+              observations={observations}
+              history={observationHistory}
+              onClearObservations={() => setObservations([])}
+              onClearHistory={() => setObservationHistory([])}
+            />
           </div>
         )}
 
@@ -317,7 +441,7 @@ export default function App() {
       <footer className="bg-white dark:bg-slate-900 border-t border-slate-200 dark:border-slate-800 py-6 text-center text-xs text-slate-500 space-y-2">
         <div className="flex flex-wrap items-center justify-center gap-4">
           <button onClick={() => setActiveTab('home')} className="hover:underline">ホーム</button>
-          <button onClick={() => setActiveTab('map')} className="hover:underline">全国観測マップ</button>
+          <button onClick={() => setActiveTab('map')} className="hover:underline">代表地域マップ</button>
           <button onClick={() => setActiveTab('social')} className="hover:underline">SNS集合知</button>
           <button onClick={() => setActiveTab('evaluation')} className="hover:underline">事後検証</button>
           <button onClick={() => setActiveTab('status')} className="hover:underline">データソース接続状態</button>
@@ -348,6 +472,7 @@ export default function App() {
       {selectedCellForDetail && (
         <CellDetailPanel
           cell={selectedCellForDetail}
+          history={observationHistory.filter(snapshot => snapshot.cellId === selectedCellForDetail.id)}
           onClose={() => setSelectedCellForDetail(null)}
           onOpenRecord={(cell) => {
             setSelectedCell(cell);

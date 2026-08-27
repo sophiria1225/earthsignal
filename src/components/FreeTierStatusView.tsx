@@ -61,11 +61,21 @@ export const FreeTierStatusView: React.FC = () => {
           detail: value.isLive ? `同時間帯ベースライン ${samples}標本` : (value.error || '取得停止中'),
         };
       }
-      const connected = (value.sources || []).filter((source: any) => source.ok).map((source: any) => source.source);
+      const sources = Array.isArray(value.sources) ? value.sources : [];
+      const connected = sources.filter((source: any) => source.ok && !source.degraded).map((source: any) => source.source);
+      const partial = sources.filter((source: any) => source.ok && source.degraded).map((source: any) => source.source);
+      const failed = sources.filter((source: any) => !source.ok).map((source: any) => source.source);
+      const fullyLive = value.isLive && partial.length === 0 && failed.length === 0;
+      const details = [
+        connected.length > 0 ? `${connected.join(' / ')} 接続` : '',
+        partial.length > 0 ? `${partial.join(' / ')} 一部低下` : '',
+        failed.length > 0 ? `${failed.join(' / ')} 失敗` : '',
+        `24時間内 ${value.posts?.length || 0}件`,
+      ].filter(Boolean).join('・');
       return {
         ...check,
-        state: value.isLive ? 'ok' : 'degraded',
-        detail: value.isLive ? `${connected.join(' / ')} 接続・24時間内 ${value.posts?.length || 0}件` : '公開APIへ接続できません',
+        state: fullyLive ? 'ok' : 'degraded',
+        detail: value.isLive ? details : '公開APIへ接続できません',
       };
     });
 

@@ -1,5 +1,5 @@
 import React from 'react';
-import { Earthquake, GeoCell, Observation } from '../types';
+import { Earthquake, GeoCell, Observation, RuntimeDataSourceStatus } from '../types';
 import { ScientificDisclaimer } from './ScientificDisclaimer';
 import { 
   Activity, 
@@ -28,6 +28,7 @@ interface Props {
   onSelectCell: (cell: GeoCell) => void;
   recentEarthquakes: Earthquake[];
   recentObservations: Observation[];
+  sourceStatuses?: RuntimeDataSourceStatus[];
   onOpenEarthquakeDetail: (eq: Earthquake) => void;
   onOpenRecordModal: (type?: 'audio' | 'cloud' | 'report') => void;
   onNavigateToMap: () => void;
@@ -43,6 +44,7 @@ export const HomeDashboard: React.FC<Props> = ({
   onSelectCell,
   recentEarthquakes,
   recentObservations,
+  sourceStatuses = [],
   onOpenEarthquakeDetail,
   onOpenRecordModal,
   onNavigateToMap,
@@ -53,6 +55,8 @@ export const HomeDashboard: React.FC<Props> = ({
 }) => {
   const latestEq = recentEarthquakes[0];
   const score = selectedCell.currentScore;
+  const weatherFetchedAt = Date.parse(selectedCell.weather.fetchedAt || '');
+  const hasLiveWeather = !selectedCell.weather.isStale && Number.isFinite(weatherFetchedAt);
 
   const getScoreBadge = (scoreVal: number | null, status: string) => {
     if (status === 'insufficient' || scoreVal === null) {
@@ -76,6 +80,25 @@ export const HomeDashboard: React.FC<Props> = ({
     <div id="home-dashboard" className="space-y-6 max-w-7xl mx-auto px-3 sm:px-6 py-6">
       {/* 科学的免責バナー */}
       <ScientificDisclaimer />
+
+      <button
+        type="button"
+        onClick={onNavigateToStatus}
+        className="w-full grid grid-cols-1 sm:grid-cols-3 gap-2 text-left"
+        aria-label="データソース接続状態を開く"
+      >
+        {sourceStatuses.map(source => (
+          <span key={source.key} className="bg-white dark:bg-slate-800 rounded-xl border border-slate-200 dark:border-slate-700 px-3 py-2.5 flex items-center justify-between gap-3 shadow-sm">
+            <span>
+              <span className="text-[11px] text-slate-500 block">{source.label}</span>
+              <span className="text-xs font-semibold text-slate-800 dark:text-slate-200">{source.detail}</span>
+            </span>
+            <span className={`w-2.5 h-2.5 rounded-full shrink-0 ${
+              source.state === 'live' ? 'bg-emerald-500' : source.state === 'loading' ? 'bg-indigo-500 animate-pulse' : 'bg-amber-500'
+            }`} title={source.error || source.state} />
+          </span>
+        ))}
+      </button>
 
       {/* トップグリッド: 最新公式地震情報 & 地域観測異常度カード */}
       <div className="grid grid-cols-1 lg:grid-cols-12 gap-6">
@@ -148,10 +171,11 @@ export const HomeDashboard: React.FC<Props> = ({
                 <div className="space-y-1.5 pt-1">
                   <span className="text-xs font-semibold text-slate-500 dark:text-slate-400 block">直近の地震履歴:</span>
                   {recentEarthquakes.slice(1, 4).map((eq) => (
-                    <div
+                    <button
+                      type="button"
                       key={eq.id}
                       onClick={() => onOpenEarthquakeDetail(eq)}
-                      className="flex items-center justify-between p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700/50 cursor-pointer text-xs transition-colors border border-transparent hover:border-slate-200 dark:hover:border-slate-700"
+                      className="w-full flex items-center justify-between p-2 rounded-lg hover:bg-slate-100 dark:hover:bg-slate-700/50 cursor-pointer text-xs transition-colors border border-transparent hover:border-slate-200 dark:hover:border-slate-700 text-left"
                     >
                       <div className="flex items-center gap-2">
                         <span className="font-bold text-slate-800 dark:text-slate-200">{eq.hypocenterName}</span>
@@ -161,7 +185,7 @@ export const HomeDashboard: React.FC<Props> = ({
                         <span>最大震度 {eq.maxIntensity || '不明'}</span>
                         <ChevronRight className="w-3.5 h-3.5" />
                       </div>
-                    </div>
+                    </button>
                   ))}
                 </div>
               </div>
@@ -198,7 +222,7 @@ export const HomeDashboard: React.FC<Props> = ({
                     <span className="text-xs text-slate-500">({selectedCell.prefecture})</span>
                   </div>
                   <span className="text-[11px] text-slate-500 dark:text-slate-400">
-                    H3セルID: {selectedCell.id}
+                    観測地域ID: {selectedCell.id}
                   </span>
                 </div>
               </div>
@@ -311,7 +335,7 @@ export const HomeDashboard: React.FC<Props> = ({
               onClick={onNavigateToMap}
               className="text-indigo-600 dark:text-indigo-400 hover:underline font-semibold flex items-center gap-1"
             >
-              全国観測マップを開く <ChevronRight className="w-4 h-4" />
+              代表地域マップを開く <ChevronRight className="w-4 h-4" />
             </button>
           </div>
         </div>
@@ -329,9 +353,10 @@ export const HomeDashboard: React.FC<Props> = ({
 
         <div className="grid grid-cols-1 md:grid-cols-3 gap-4">
           {/* 1. 10秒音響録音 */}
-          <div
+          <button
+            type="button"
             onClick={() => onOpenRecordModal('audio')}
-            className="group bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 hover:border-indigo-500 dark:hover:border-indigo-400 shadow-sm hover:shadow-md transition-all cursor-pointer relative overflow-hidden"
+            className="group bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 hover:border-indigo-500 dark:hover:border-indigo-400 shadow-sm hover:shadow-md transition-all cursor-pointer relative overflow-hidden text-left"
           >
             <div className="flex items-start gap-4">
               <div className="w-12 h-12 rounded-xl bg-indigo-500/10 text-indigo-600 dark:text-indigo-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
@@ -349,12 +374,13 @@ export const HomeDashboard: React.FC<Props> = ({
                 </span>
               </div>
             </div>
-          </div>
+          </button>
 
           {/* 2. 雲写真を記録 */}
-          <div
+          <button
+            type="button"
             onClick={() => onOpenRecordModal('cloud')}
-            className="group bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 hover:border-cyan-500 dark:hover:border-cyan-400 shadow-sm hover:shadow-md transition-all cursor-pointer relative overflow-hidden"
+            className="group bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 hover:border-cyan-500 dark:hover:border-cyan-400 shadow-sm hover:shadow-md transition-all cursor-pointer relative overflow-hidden text-left"
           >
             <div className="flex items-start gap-4">
               <div className="w-12 h-12 rounded-xl bg-cyan-500/10 text-cyan-600 dark:text-cyan-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
@@ -372,12 +398,13 @@ export const HomeDashboard: React.FC<Props> = ({
                 </span>
               </div>
             </div>
-          </div>
+          </button>
 
           {/* 3. 市民構造化レポート */}
-          <div
+          <button
+            type="button"
             onClick={() => onOpenRecordModal('report')}
-            className="group bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 hover:border-emerald-500 dark:hover:border-emerald-400 shadow-sm hover:shadow-md transition-all cursor-pointer relative overflow-hidden"
+            className="group bg-white dark:bg-slate-800 p-5 rounded-2xl border border-slate-200 dark:border-slate-700 hover:border-emerald-500 dark:hover:border-emerald-400 shadow-sm hover:shadow-md transition-all cursor-pointer relative overflow-hidden text-left"
           >
             <div className="flex items-start gap-4">
               <div className="w-12 h-12 rounded-xl bg-emerald-500/10 text-emerald-600 dark:text-emerald-400 flex items-center justify-center shrink-0 group-hover:scale-110 transition-transform">
@@ -395,7 +422,7 @@ export const HomeDashboard: React.FC<Props> = ({
                 </span>
               </div>
             </div>
-          </div>
+          </button>
         </div>
       </div>
 
@@ -440,9 +467,14 @@ export const HomeDashboard: React.FC<Props> = ({
               <CloudRain className="w-4 h-4 text-indigo-500" />
               {selectedCell.name} のリアルタイム気象データ
             </h4>
-            <span className="text-xs text-slate-500">更新: {new Date(selectedCell.weather.fetchedAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}</span>
+            <span className="text-xs text-slate-500">
+              {hasLiveWeather
+                ? `更新: ${new Date(weatherFetchedAt).toLocaleTimeString('ja-JP', { hour: '2-digit', minute: '2-digit' })}`
+                : '現在値を取得できていません'}
+            </span>
           </div>
 
+          {hasLiveWeather ? (
           <div className="grid grid-cols-2 sm:grid-cols-4 gap-3 text-xs">
             <div className="bg-slate-50 dark:bg-slate-900/60 p-3 rounded-xl">
               <span className="text-slate-500 block text-[11px] mb-1">全雲量</span>
@@ -454,7 +486,7 @@ export const HomeDashboard: React.FC<Props> = ({
               <span className="text-slate-500 block text-[11px] mb-1">海面気圧 (msl)</span>
               <span className="text-xl font-bold text-slate-900 dark:text-white">{selectedCell.weather.pressureMsl} <span className="text-xs font-normal">hPa</span></span>
               <span className={`text-[10px] block mt-0.5 font-medium ${selectedCell.weather.pressureChange24h && selectedCell.weather.pressureChange24h < 0 ? 'text-amber-500' : 'text-slate-400'}`}>
-                24h差: {selectedCell.weather.pressureChange24h ? `${selectedCell.weather.pressureChange24h > 0 ? '+' : ''}${selectedCell.weather.weatherCode} hPa` : '安定'}
+                24h差: {selectedCell.weather.pressureChange24h != null ? `${selectedCell.weather.pressureChange24h > 0 ? '+' : ''}${selectedCell.weather.pressureChange24h} hPa` : '未取得'}
               </span>
             </div>
 
@@ -470,6 +502,12 @@ export const HomeDashboard: React.FC<Props> = ({
               <span className="text-[10px] text-slate-400 block mt-0.5">相対湿度: {selectedCell.weather.relativeHumidity}%</span>
             </div>
           </div>
+          ) : (
+            <div className="rounded-xl bg-amber-50 dark:bg-amber-950/30 border border-amber-200 dark:border-amber-900 p-4 text-xs text-amber-800 dark:text-amber-300 flex items-start gap-2">
+              <AlertCircle className="w-4 h-4 shrink-0 mt-0.5" />
+              <span>Open-Meteoの取得待ち、または一時的な取得失敗です。0を観測値として表示せず、次回更新まで気象異常度を採点対象外にします。</span>
+            </div>
+          )}
         </div>
 
         {/* 事後検証研究への導線カード */}

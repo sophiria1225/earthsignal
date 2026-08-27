@@ -1,4 +1,5 @@
 import React, { useState } from 'react';
+import { useDialogAccessibility } from '../hooks/useDialogAccessibility';
 import { GeoCell, Observation, CitizenReportData } from '../types';
 import { 
   X, 
@@ -23,6 +24,7 @@ interface Props {
 }
 
 export const CitizenReportModal: React.FC<Props> = ({ cell, onClose, onSubmitObservation }) => {
+  const dialogRef = useDialogAccessibility(onClose);
   const [category, setCategory] = useState<CitizenReportData['category']>('animal_active');
   const [intensity, setIntensity] = useState(3);
   const [differenceFromNormal, setDifferenceFromNormal] = useState(3);
@@ -82,7 +84,7 @@ export const CitizenReportModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
 
   return (
     <div id="citizen-report-modal" className="fixed inset-0 z-50 bg-slate-900/60 backdrop-blur-sm flex items-center justify-center p-3 sm:p-6 overflow-y-auto">
-      <div className="bg-white dark:bg-slate-800 w-full max-w-xl rounded-2xl border border-slate-200 dark:border-slate-700 shadow-2xl overflow-hidden my-auto max-h-[90vh] flex flex-col">
+      <div ref={dialogRef} role="dialog" aria-modal="true" aria-labelledby="citizen-report-title" tabIndex={-1} className="bg-white dark:bg-slate-800 w-full max-w-xl rounded-2xl border border-slate-200 dark:border-slate-700 shadow-2xl overflow-hidden my-auto max-h-[90vh] flex flex-col outline-none">
         
         {/* ヘッダー */}
         <div className="p-5 border-b border-slate-200 dark:border-slate-700 flex items-center justify-between bg-slate-50 dark:bg-slate-900/50">
@@ -91,7 +93,7 @@ export const CitizenReportModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
               <FileText className="w-5 h-5" />
             </div>
             <div>
-              <h3 className="font-bold text-slate-900 dark:text-white text-base">
+              <h3 id="citizen-report-title" className="font-bold text-slate-900 dark:text-white text-base">
                 市民観測レポートの投稿 (第6.7章)
               </h3>
               <span className="text-xs text-slate-500">
@@ -101,6 +103,7 @@ export const CitizenReportModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
           </div>
           <button
             onClick={onClose}
+            aria-label="市民観測レポートを閉じる"
             className="p-1.5 rounded-lg text-slate-400 hover:text-slate-600 dark:hover:text-slate-200 hover:bg-slate-100 dark:hover:bg-slate-800"
           >
             <X className="w-5 h-5" />
@@ -120,10 +123,12 @@ export const CitizenReportModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
                 {categories.map((c) => {
                   const isSelected = category === c.key;
                   return (
-                    <div
+                    <button
+                      type="button"
                       key={c.key}
                       onClick={() => setCategory(c.key)}
-                      className={`p-3 rounded-xl border cursor-pointer transition-all ${
+                      aria-pressed={isSelected}
+                      className={`p-3 rounded-xl border cursor-pointer transition-all text-left ${
                         isSelected
                           ? 'bg-emerald-50 dark:bg-emerald-950/40 border-emerald-500 text-emerald-900 dark:text-emerald-200 shadow-sm'
                           : 'bg-slate-50 dark:bg-slate-900/50 border-slate-200 dark:border-slate-700 hover:bg-slate-100'
@@ -133,7 +138,7 @@ export const CitizenReportModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
                       <span className="text-[11px] text-slate-500 dark:text-slate-400 leading-tight block">
                         {c.desc}
                       </span>
-                    </div>
+                    </button>
                   );
                 })}
               </div>
@@ -211,10 +216,11 @@ export const CitizenReportModal: React.FC<Props> = ({ cell, onClose, onSubmitObs
                 onChange={(e) => setDescription(e.target.value)}
                 placeholder="例: 午前10時頃、ベランダから見るとカラスが一斉に西へ騒がしく飛び交っていた 等"
                 rows={3}
+                maxLength={500}
                 className="w-full p-2.5 rounded-xl bg-slate-50 dark:bg-slate-900 border border-slate-200 dark:border-slate-700 focus:ring-2 focus:ring-emerald-500 outline-none"
               />
               <span className="text-[10px] text-slate-400 block mt-1">
-                ※個人を特定できる住所や人名は記入しないでください。
+                ※個人を特定できる住所や人名は記入しないでください（{description.length}/500文字）。
               </span>
             </div>
 
