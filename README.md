@@ -21,6 +21,7 @@ npm run dev
 ```
 
 本番ビルドは `npm run build`、起動は `NODE_ENV=production npm start` です。ポートは `PORT`（既定値3000）で変更できます。
+Node.js 20.12以上を使用してください。Cloud Run以外で1段の信頼できるリバースプロキシを置く場合だけ `TRUST_PROXY=true` を設定します。
 
 AI解説には安定版の `gemini-3.7-flash` を使用します。Blueskyの公開検索がホスティング元IPを拒否する場合は、Blueskyで発行したApp Passwordを `BLUESKY_IDENTIFIER` と `BLUESKY_APP_PASSWORD` に設定してください。認証情報はサーバー内のセッション作成だけに使い、ブラウザへ返しません。
 
