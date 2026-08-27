@@ -1,0 +1,6 @@
+{
+  "name": "EarthSignal",
+  "description": "地震前兆候補の観測・検証プラットフォーム。公的地震情報の可視化、気象・音響・市民レポートの平常時からの観測異常度算出、および地震後の事後検証を提供します（※地震予知アプリではありません）。",
+  "requestFramePermissions": ["microphone", "geolocation"],
+  "majorCapabilities": ["MAJOR_CAPABILITY_SERVER_SIDE_GEMINI_API"]
+}
