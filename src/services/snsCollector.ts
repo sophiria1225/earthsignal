@@ -4,7 +4,7 @@
  * Implements rule dictionary, negation/historical filtering, deduplication, geo-extraction, and quality scoring
  */
 
-import { SocialCategory, SocialDerivedPost, SocialHourlySummary, SocialSourceType, AnalysisMode } from '../types';
+import { SocialCategory, SocialDerivedPost, SocialFetchResponse, SocialHourlySummary, SocialSourceType, AnalysisMode } from '../types';
 
 // 7.3 検索語辞書
 export const KEYWORD_DICTIONARY: Record<SocialCategory, string[]> = {
@@ -20,8 +20,8 @@ export const KEYWORD_DICTIONARY: Record<SocialCategory, string[]> = {
 };
 
 // 否定文・過去談・比喩・公式ニュースの除外ルール (16.6)
-const NEGATION_REGEX = /(ない|なかった|ではない|違う|デマ|無関係|嘘|勘違い|嘘っぽい)/i;
-const HISTORICAL_REGEX = /(昔|去年|昨年|\d+年前|過去|思い出|東日本大震災の時|あの時)/i;
+const NEGATION_REGEX = /(ない|無い|なかった|ではない|違う|デマ|無関係|根拠.{0,5}(ない|無い)|迷信|嘘|勘違い|嘘っぽい)/i;
+const HISTORICAL_REGEX = /(昔|先日|数日前|この前|去年|昨年|\d+[日週ヶか月年]前|過去|思い出|東日本大震災の時|あの時)/i;
 const QUOTATION_REGEX = /(ニュース|記事|引用|リポスト|RT|転載|報道|まとめ)/i;
 
 // 都道府県・主要都市の辞書
@@ -113,7 +113,7 @@ export function classifyTextByRules(text: string): {
 /**
  * 7.6 地域抽出
  */
-export function extractLocationFromText(text: string, defaultCellId: string = 'cell_tokyo_01'): {
+export function extractLocationFromText(text: string, defaultCellId: string = 'cell_unknown'): {
   placeName?: string;
   h3Cell: string;
   confidence: number;
@@ -137,6 +137,28 @@ export function extractLocationFromText(text: string, defaultCellId: string = 'c
   }
 
   return { h3Cell: defaultCellId, confidence: 0.20 };
+}
+
+function decodeHtmlEntities(value: string): string {
+  const entities: Record<string, string> = {
+    amp: '&', lt: '<', gt: '>', quot: '"', apos: "'", '#39': "'", nbsp: ' ',
+  };
+  return value.replace(/&(#x[\da-f]+|#\d+|\w+);/gi, (match, entity: string) => {
+    if (entity[0] === '#') {
+      const radix = entity[1]?.toLowerCase() === 'x' ? 16 : 10;
+      const raw = radix === 16 ? entity.slice(2) : entity.slice(1);
+      const codePoint = Number.parseInt(raw, radix);
+      return Number.isFinite(codePoint) ? String.fromCodePoint(codePoint) : match;
+    }
+    return entities[entity.toLowerCase()] ?? match;
+  });
+}
+
+export function mastodonHtmlToText(value: string): string {
+  return normalizeSocialText(decodeHtmlEntities(value
+    .replace(/<br\s*\/?>/gi, '\n')
+    .replace(/<\/p>/gi, '\n')
+    .replace(/<[^>]*>/g, ' ')));
 }
 
 /**
@@ -285,13 +307,15 @@ export const SAMPLE_SOCIAL_POSTS: SocialDerivedPost[] = [
 /**
  * Bluesky 公開検索 API (認証不要・CORS対応) からリアルタイム投稿を取得
  */
-export async function fetchLiveBlueskyPosts(query: string = '地震雲 OR 地鳴り OR 犬 吠える'): Promise<SocialDerivedPost[]> {
+export async function fetchLiveBlueskyPosts(
+  query: string = '地震雲 OR 地鳴り OR 犬 吠える',
+  options: { signal?: AbortSignal; throwOnError?: boolean } = {}
+): Promise<SocialDerivedPost[]> {
   try {
-    const url = `https://public.api.bsky.app/xrpc/app.bsky.feed.searchPosts?q=${encodeURIComponent(query)}&limit=12`;
-    const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
+    const url = `https://api.bsky.app/xrpc/app.bsky.feed.searchPosts?q=${encodeURIComponent(query)}&limit=20&sort=latest&lang=ja`;
+    const res = await fetch(url, { headers: { 'Accept': 'application/json' }, signal: options.signal });
     if (!res.ok) {
-      console.warn('Bluesky API fetch failed with status:', res.status);
-      return [];
+      throw new Error(`Bluesky API returned ${res.status}`);
     }
     const data = await res.json();
     const posts = data.posts || [];
@@ -321,6 +345,7 @@ export async function fetchLiveBlueskyPosts(query: string = '地震雲 OR 地鳴
         id: `bsky_${p.cid || Math.random().toString(36).substring(2, 9)}`,
         source: 'bluesky',
         sourceIdHash: p.cid || Math.random().toString(36),
+        actorIdHash: p.author?.did,
         sourceUrl: webUrl,
         postedAt: p.record?.createdAt || new Date().toISOString(),
         fetchedAt: new Date().toISOString(),
@@ -338,6 +363,7 @@ export async function fetchLiveBlueskyPosts(query: string = '地震雲 OR 地鳴
       } as SocialDerivedPost;
     }).filter((p: SocialDerivedPost) => p.category !== 'unknown' && p.category !== 'unrelated');
   } catch (err) {
+    if (options.throwOnError) throw err;
     console.warn('Failed to fetch live Bluesky posts:', err);
     return [];
   }
@@ -346,36 +372,42 @@ export async function fetchLiveBlueskyPosts(query: string = '地震雲 OR 地鳴
 /**
  * Mastodon 公開タグ API (mstdn.jp) からリアルタイム投稿を取得
  */
-export async function fetchLiveMastodonPosts(tag: string = '地震雲'): Promise<SocialDerivedPost[]> {
+export async function fetchLiveMastodonPosts(
+  tag: string = '地震雲',
+  instance: string = 'https://mstdn.jp',
+  options: { signal?: AbortSignal; throwOnError?: boolean } = {}
+): Promise<SocialDerivedPost[]> {
   try {
-    const url = `https://mstdn.jp/api/v1/timelines/tag/${encodeURIComponent(tag)}?limit=10`;
-    const res = await fetch(url, { headers: { 'Accept': 'application/json' } });
-    if (!res.ok) return [];
+    const baseUrl = instance.replace(/\/$/, '');
+    const url = `${baseUrl}/api/v1/timelines/tag/${encodeURIComponent(tag)}?limit=20`;
+    const res = await fetch(url, { headers: { 'Accept': 'application/json' }, signal: options.signal });
+    if (!res.ok) throw new Error(`${new URL(baseUrl).hostname} returned ${res.status}`);
     const posts = await res.json();
     if (!Array.isArray(posts)) return [];
 
     return posts.map((p: any) => {
-      const rawContent = p.content || '';
-      const text = rawContent.replace(/<[^>]*>/g, ' ');
+      const status = p.reblog || p;
+      const text = mastodonHtmlToText(`${status.spoiler_text || ''} ${status.content || ''}`);
       const { category, isOfficialReaction } = classifyTextByRules(text);
       const loc = extractLocationFromText(text);
 
       const quality = calculateInformationQuality({
-        hasTimestamp: Boolean(p.created_at),
+        hasTimestamp: Boolean(status.created_at),
         hasLocation: Boolean(loc.placeName),
         isSpecific: text.length > 15,
-        hasMediaLink: (p.media_attachments || []).length > 0,
+        hasMediaLink: (status.media_attachments || []).length > 0,
         isPreEvent: !isOfficialReaction,
         isDuplicate: false,
         isProfileLocationOnly: false,
       });
 
       return {
-        id: `masto_${p.id || Math.random().toString(36).substring(2, 9)}`,
+        id: `masto_${status.id || Math.random().toString(36).substring(2, 9)}`,
         source: 'mastodon',
-        sourceIdHash: String(p.id),
-        sourceUrl: p.url || `https://mstdn.jp/tags/${encodeURIComponent(tag)}`,
-        postedAt: p.created_at || new Date().toISOString(),
+        sourceIdHash: String(status.id),
+        actorIdHash: status.account?.id ? String(status.account.id) : undefined,
+        sourceUrl: status.url || status.uri || `${baseUrl}/tags/${encodeURIComponent(tag)}`,
+        postedAt: status.created_at || new Date().toISOString(),
         fetchedAt: new Date().toISOString(),
         category,
         subject: category,
@@ -391,9 +423,51 @@ export async function fetchLiveMastodonPosts(tag: string = '地震雲'): Promise
       } as SocialDerivedPost;
     }).filter((p: SocialDerivedPost) => p.category !== 'unknown' && p.category !== 'unrelated');
   } catch (err) {
+    if (options.throwOnError) throw err;
     console.warn('Failed to fetch live Mastodon posts:', err);
     return [];
   }
+}
+
+/** 同じ投稿が複数の検索語・インスタンスに現れた場合に1件へまとめる。 */
+export function deduplicateSocialPosts(posts: SocialDerivedPost[]): SocialDerivedPost[] {
+  const seenIds = new Set<string>();
+  const seenContent = new Set<string>();
+  return posts.filter((post) => {
+    const idKey = `${post.source}:${post.sourceIdHash}`;
+    const contentKey = `${post.source}:${normalizeSocialText(post.temporaryExcerpt || '').toLowerCase()}`;
+    if (seenIds.has(idKey) || (post.temporaryExcerpt && seenContent.has(contentKey))) return false;
+    seenIds.add(idKey);
+    if (post.temporaryExcerpt) seenContent.add(contentKey);
+    return true;
+  });
+}
+
+let liveSocialRequest: Promise<SocialFetchResponse> | null = null;
+
+/** ブラウザは外部SNSへ直接接続せず、同一オリジンの収集APIだけを呼ぶ。 */
+export function fetchLiveSocialPosts(): Promise<SocialFetchResponse> {
+  // React StrictModeの二重effectや更新ボタン連打でも同一リクエストへ合流させる。
+  if (liveSocialRequest) return liveSocialRequest;
+
+  liveSocialRequest = (async () => {
+    const res = await fetch('/api/social/posts', { headers: { Accept: 'application/json' } });
+    if (!res.ok) {
+      let detail = '';
+      try {
+        const body = await res.json();
+        detail = body?.error ? `: ${body.error}` : '';
+      } catch {
+        // JSONでないエラー応答はステータスだけを表示する。
+      }
+      throw new Error(`SNS収集APIが ${res.status} を返しました${detail}`);
+    }
+    return res.json();
+  })().finally(() => {
+    liveSocialRequest = null;
+  });
+
+  return liveSocialRequest;
 }
 
 /**
@@ -404,7 +478,13 @@ export function generateCellSocialSummary(
   posts: SocialDerivedPost[] = SAMPLE_SOCIAL_POSTS,
   window: '1h' | '6h' | '24h' = '6h'
 ): SocialHourlySummary {
-  const cellPosts = posts.filter(p => p.h3Cell === cellId && !p.isPostEventReaction);
+  const windowMs = { '1h': 60 * 60_000, '6h': 6 * 60 * 60_000, '24h': 24 * 60 * 60_000 }[window];
+  const cutoff = Date.now() - windowMs;
+  const cellPosts = posts.filter(p =>
+    p.h3Cell === cellId
+    && !p.isPostEventReaction
+    && new Date(p.postedAt).getTime() >= cutoff
+  );
   const categories: Record<SocialCategory, number> = {
     cloud: 0,
     animal: 0,
@@ -443,8 +523,8 @@ export function generateCellSocialSummary(
   }
 
   const total = cellPosts.length;
-  const avgQuality = total > 0 ? totalQuality / total : 0.6;
-  const locationExplicitRatio = total > 0 ? explicitLocationCount / total : 0.5;
+  const avgQuality = total > 0 ? totalQuality / total : 0;
+  const locationExplicitRatio = total > 0 ? explicitLocationCount / total : 0;
 
   // 観測異常度 (平常中央値 4.0件 に対する比率)
   const median = 4.0;
@@ -456,7 +536,9 @@ export function generateCellSocialSummary(
     cellId,
     window,
     totalPosts: total,
-    uniqueActorEstimate: Math.max(1, Math.round(total * 0.85)),
+    uniqueActorEstimate: total === 0
+      ? 0
+      : new Set(cellPosts.map(p => p.actorIdHash || p.sourceIdHash)).size,
     locationExplicitRatio: Math.round(locationExplicitRatio * 100) / 100,
     qualityScore: Math.round(avgQuality * 100) / 100,
     anomalyScore: Math.min(100, Math.max(0, anomalyScore)),

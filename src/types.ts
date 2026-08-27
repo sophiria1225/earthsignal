@@ -63,6 +63,7 @@ export interface SocialDerivedPost {
   id: string;
   source: SocialSourceType;
   sourceIdHash: string;
+  actorIdHash?: string; // 投稿者識別子の不可逆ハッシュ（投稿者数の推定専用）
   sourceUrl: string;
   postedAt: string;
   fetchedAt: string;
@@ -78,6 +79,20 @@ export interface SocialDerivedPost {
   duplicateGroup?: string;
   analysisMode: AnalysisMode;
   temporaryExcerpt?: string; // 24h以内消去用
+}
+
+export interface SocialFetchSourceStatus {
+  source: SocialSourceType;
+  ok: boolean;
+  fetched: number;
+  error?: string;
+}
+
+export interface SocialFetchResponse {
+  posts: SocialDerivedPost[];
+  fetchedAt: string;
+  isLive: boolean;
+  sources: SocialFetchSourceStatus[];
 }
 
 export interface SocialHourlySummary {
@@ -303,4 +318,3 @@ export interface ExportRequest {
   includeSocialDerived: boolean;
   anonymizeCoordinates: boolean; // 必ずセル中心へ丸める
 }
-

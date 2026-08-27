@@ -1,10 +1,9 @@
 import React, { useState, useEffect } from 'react';
-import { GeoCell, SocialCategory, SocialDerivedPost, SocialHourlySummary, SocialSourceType } from '../types';
+import { GeoCell, SocialCategory, SocialDerivedPost, SocialFetchSourceStatus, SocialHourlySummary, SocialSourceType } from '../types';
 import { 
-  SAMPLE_SOCIAL_POSTS, 
   KEYWORD_DICTIONARY, 
-  fetchLiveBlueskyPosts, 
-  fetchLiveMastodonPosts, 
+  fetchLiveSocialPosts,
+  generateCellSocialSummary,
   buildSocialSearchUrl 
 } from '../services/snsCollector';
 import { 
@@ -39,7 +38,7 @@ export const SocialObservationView: React.FC<Props> = ({
   selectedCell,
   allCells,
   onSelectCell,
-  posts: initialPosts = SAMPLE_SOCIAL_POSTS,
+  posts: initialPosts = [],
 }) => {
   const [selectedWindow, setSelectedWindow] = useState<'1h' | '6h' | '24h'>('6h');
   const [selectedCategory, setSelectedCategory] = useState<SocialCategory | 'all'>('all');
@@ -47,6 +46,7 @@ export const SocialObservationView: React.FC<Props> = ({
   const [postsList, setPostsList] = useState<SocialDerivedPost[]>(initialPosts);
   const [isLoadingLive, setIsLoadingLive] = useState<boolean>(false);
   const [liveFetchStatus, setLiveFetchStatus] = useState<string | null>(null);
+  const [sourceStatuses, setSourceStatuses] = useState<SocialFetchSourceStatus[]>([]);
   const [copiedUrl, setCopiedUrl] = useState<string | null>(null);
 
   // 初期マウント時の自動取得と、定期的な自動更新（1分毎）
@@ -62,80 +62,44 @@ export const SocialObservationView: React.FC<Props> = ({
 
   // リアルタイム公開SNS投稿のライブ取得
   const handleFetchLivePosts = async (isInitial = false) => {
-    if (!isInitial) setIsLoadingLive(true);
-    if (!isInitial) setLiveFetchStatus('Bluesky & Mastodon 公開エンドポイントへ接続中...');
+    setIsLoadingLive(true);
+    if (!isInitial) setLiveFetchStatus('サーバー経由で Bluesky / Mastodon 公開APIへ接続中...');
     
     try {
-      const [bskyPosts1, bskyPosts2, mastoPosts] = await Promise.all([
-        fetchLiveBlueskyPosts('地震雲'),
-        fetchLiveBlueskyPosts('地鳴り'),
-        fetchLiveMastodonPosts('地震雲'),
-      ]);
+      const result = await fetchLiveSocialPosts();
+      setPostsList(result.posts);
+      setSourceStatuses(result.sources);
 
-      const combined = [...bskyPosts1, ...bskyPosts2, ...mastoPosts];
-      
-      if (combined.length > 0) {
-        setPostsList((prev) => {
-          const existingIds = new Set(combined.map(p => p.id));
-          // 初期ロード時はモックデータをクリアして実データのみにする
-          const filteredOld = isInitial ? [] : prev.filter(p => !existingIds.has(p.id));
-          
-          // 時間の新しい順にソートして返す
-          const newList = [...combined, ...filteredOld].sort((a, b) => {
-            return new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime();
-          });
-          
-          return newList;
-        });
-        if (!isInitial) setLiveFetchStatus(`実在する公開投稿 ${combined.length} 件をリアルタイム取得しました`);
-      } else {
-        if (!isInitial) setLiveFetchStatus('現在取得可能な新規投稿はありません（最新状態です）');
+      if (!isInitial) {
+        const failed = result.sources.filter(source => !source.ok).map(source => source.source);
+        const suffix = failed.length > 0 ? `（${failed.join(', ')} は取得失敗）` : '';
+        setLiveFetchStatus(
+          result.posts.length > 0
+            ? `実在する公開投稿 ${result.posts.length} 件を取得しました${suffix}`
+            : `関連する公開投稿は見つかりませんでした${suffix}`
+        );
       }
-    } catch (e) {
+    } catch (e: unknown) {
       console.error(e);
-      if (!isInitial) setLiveFetchStatus('リアルタイム取得エラー（外部エンドポイント待機中）');
+      const message = e instanceof Error ? e.message : '不明なエラー';
+      setLiveFetchStatus(`リアルタイム取得エラー: ${message}`);
     } finally {
       setIsLoadingLive(false);
       if (!isInitial) setTimeout(() => setLiveFetchStatus(null), 6000);
     }
   };
 
-  const summary: SocialHourlySummary = selectedCell.socialSummary || {
-    cellId: selectedCell.id,
-    window: selectedWindow,
-    totalPosts: postsList.length,
-    uniqueActorEstimate: Math.max(1, Math.round(postsList.length * 0.85)),
-    locationExplicitRatio: 0.72,
-    qualityScore: 0.76,
-    anomalyScore: 65,
-    categories: {
-      cloud: postsList.filter(p => p.category === 'cloud').length,
-      animal: postsList.filter(p => p.category === 'animal').length,
-      sound: postsList.filter(p => p.category === 'sound').length,
-      shaking: postsList.filter(p => p.category === 'shaking').length,
-      water: 0,
-      device: 0,
-      official_reaction: 0,
-      unrelated: 0,
-      unknown: 0,
-    },
-    sources: {
-      bluesky: postsList.filter(p => p.source === 'bluesky').length,
-      mastodon: postsList.filter(p => p.source === 'mastodon').length,
-      youtube: postsList.filter(p => p.source === 'youtube').length,
-      misskey: 0,
-    },
-    analysisModes: {
-      rules: postsList.length,
-      embedding: 0,
-      llm: 0,
-      rules_only_quota: 0,
-    },
-    globalTopicSpike: false,
-    notice: 'SNS投稿数の増加は地震の前兆を意味しません。報道・天候等の別要因が存在します。',
-  };
+  const summary: SocialHourlySummary = generateCellSocialSummary(
+    selectedCell.id,
+    postsList,
+    selectedWindow
+  );
 
   const filteredPosts = postsList.filter(p => {
+    const windowHours = selectedWindow === '1h' ? 1 : selectedWindow === '6h' ? 6 : 24;
+    if (new Date(p.postedAt).getTime() < Date.now() - windowHours * 60 * 60_000) return false;
+    // 地域不明投稿は地域集計には入れないが、全国参考レコードとして確認可能にする。
+    if (p.h3Cell !== selectedCell.id && p.h3Cell !== 'cell_unknown') return false;
     if (selectedCategory !== 'all' && p.category !== selectedCategory) return false;
     if (selectedSource !== 'all' && p.source !== selectedSource) return false;
     return true;
@@ -266,7 +230,7 @@ export const SocialObservationView: React.FC<Props> = ({
         <div className="flex flex-wrap items-center gap-2">
           <button
             id="btn-fetch-live-social"
-            onClick={handleFetchLivePosts}
+            onClick={() => handleFetchLivePosts(false)}
             disabled={isLoadingLive}
             className="px-3 py-2 bg-indigo-600 hover:bg-indigo-700 text-white rounded-xl text-xs font-semibold flex items-center gap-1.5 shadow-sm transition-all disabled:opacity-50"
           >
@@ -300,6 +264,24 @@ export const SocialObservationView: React.FC<Props> = ({
             {liveFetchStatus}
           </span>
           <button onClick={() => setLiveFetchStatus(null)} className="text-indigo-400 hover:text-indigo-600">✕</button>
+        </div>
+      )}
+
+      {sourceStatuses.length > 0 && (
+        <div className="flex flex-wrap gap-2 text-[11px] text-slate-500">
+          {sourceStatuses.map(status => (
+            <span
+              key={status.source}
+              title={status.error}
+              className={`px-2.5 py-1 rounded-full border ${
+                status.ok
+                  ? 'bg-emerald-50 border-emerald-200 text-emerald-700 dark:bg-emerald-950/40 dark:border-emerald-800 dark:text-emerald-300'
+                  : 'bg-rose-50 border-rose-200 text-rose-700 dark:bg-rose-950/40 dark:border-rose-800 dark:text-rose-300'
+              }`}
+            >
+              {status.source}: {status.ok ? `接続済み (${status.fetched}件)` : '取得失敗'}
+            </span>
+          ))}
         </div>
       )}
 
@@ -422,6 +404,7 @@ export const SocialObservationView: React.FC<Props> = ({
               構造化観測レコード（実在元リンク・検索URL連動）
             </h3>
             <p className="text-xs text-slate-400 mt-0.5">※各SNSの公開ポストまたは関連キーワード検索画面を直接新しいタブで開くことができます</p>
+            <p className="text-[11px] text-slate-400 mt-0.5">地域名のない投稿は地域別件数に加算せず、全国参考として一覧にのみ表示します</p>
           </div>
 
           {/* フィルター */}
@@ -498,9 +481,13 @@ export const SocialObservationView: React.FC<Props> = ({
               </div>
             );
           })}
+          {!isLoadingLive && filteredPosts.length === 0 && (
+            <div className="py-10 text-center text-xs text-slate-500">
+              選択した地域・時間帯に、場所を明示した関連投稿はありません。
+            </div>
+          )}
         </div>
       </div>
     </div>
   );
 };
-

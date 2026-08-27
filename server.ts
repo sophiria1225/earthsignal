@@ -1,7 +1,35 @@
+import 'dotenv/config';
 import express from 'express';
 import path from 'path';
+import { createHash } from 'crypto';
 import { createServer as createViteServer } from 'vite';
 import { GoogleGenAI } from '@google/genai';
+import {
+  deduplicateSocialPosts,
+  fetchLiveBlueskyPosts,
+  fetchLiveMastodonPosts,
+} from './src/services/snsCollector';
+import { SocialDerivedPost, SocialFetchResponse, SocialSourceType } from './src/types';
+
+const SOCIAL_CACHE_TTL_MS = 60_000;
+const SOCIAL_REQUEST_TIMEOUT_MS = 8_000;
+
+let socialCache: { expiresAt: number; response: SocialFetchResponse } | null = null;
+
+function hashSocialIdentifier(value: string): string {
+  return createHash('sha256').update(value).digest('hex');
+}
+
+function protectSocialIdentifiers(post: SocialDerivedPost): SocialDerivedPost {
+  return {
+    ...post,
+    id: `${post.source}_${hashSocialIdentifier(post.sourceIdHash).slice(0, 20)}`,
+    sourceIdHash: hashSocialIdentifier(`${post.source}:${post.sourceIdHash}`),
+    actorIdHash: post.actorIdHash
+      ? hashSocialIdentifier(`${post.source}:actor:${post.actorIdHash}`)
+      : undefined,
+  };
+}
 
 async function startServer() {
   const app = express();
@@ -34,7 +62,121 @@ async function startServer() {
     });
   });
 
-  // 2. AI Explanation / Hypothesis Verification endpoint using Gemini API
+  // 2. Public SNS collection. External APIs are called server-side to avoid CORS
+  // failures and to keep rate limiting/cache behavior consistent for every client.
+  app.get('/api/social/posts', async (req, res) => {
+    if (socialCache && socialCache.expiresAt > Date.now()) {
+      res.setHeader('X-EarthSignal-Cache', 'HIT');
+      return res.json(socialCache.response);
+    }
+
+    const blueskyQueries = [
+      '地震雲', '地鳴り', '犬が吠える', '鳥が騒ぐ', '揺れた気がする',
+    ];
+    const mastodonTags = ['地震雲', '地鳴り'];
+    const mastodonInstances = (process.env.MASTODON_INSTANCES || 'https://mastodon.social,https://mstdn.jp')
+      .split(',')
+      .map(value => value.trim())
+      .filter(value => /^https:\/\/[a-z0-9.-]+(?::\d+)?$/i.test(value))
+      .slice(0, 3);
+
+    type CollectionTask = {
+      source: Extract<SocialSourceType, 'bluesky' | 'mastodon'>;
+      run: () => Promise<SocialDerivedPost[]>;
+    };
+
+    const tasks: CollectionTask[] = [
+      ...blueskyQueries.map(query => ({
+        source: 'bluesky' as const,
+        run: () => fetchLiveBlueskyPosts(query, {
+          signal: AbortSignal.timeout(SOCIAL_REQUEST_TIMEOUT_MS),
+          throwOnError: true,
+        }),
+      })),
+      ...mastodonInstances.flatMap(instance => mastodonTags.map(tag => ({
+        source: 'mastodon' as const,
+        run: () => fetchLiveMastodonPosts(tag, instance, {
+          signal: AbortSignal.timeout(SOCIAL_REQUEST_TIMEOUT_MS),
+          throwOnError: true,
+        }),
+      }))),
+    ];
+
+    // Blueskyは短時間の並列検索を403で抑止するため直列化する。
+    // Mastodonはインスタンスが分散しているので並列取得して待ち時間を抑える。
+    const blueskyTasks = tasks.filter(task => task.source === 'bluesky');
+    const mastodonTasks = tasks.filter(task => task.source === 'mastodon');
+    const runSequentially = async (items: CollectionTask[]) => {
+      const settled: PromiseSettledResult<SocialDerivedPost[]>[] = [];
+      for (const item of items) {
+        try {
+          settled.push({ status: 'fulfilled', value: await item.run() });
+        } catch (reason) {
+          settled.push({ status: 'rejected', reason });
+        }
+      }
+      return settled;
+    };
+    const [blueskyResults, mastodonResults] = await Promise.all([
+      runSequentially(blueskyTasks),
+      Promise.allSettled(mastodonTasks.map(task => task.run())),
+    ]);
+    const orderedTasks = [...blueskyTasks, ...mastodonTasks];
+    const results = [...blueskyResults, ...mastodonResults];
+    const posts: SocialDerivedPost[] = [];
+    const sourceResults = new Map<SocialSourceType, { successes: number; fetched: number; errors: string[] }>();
+
+    results.forEach((result, index) => {
+      const source = orderedTasks[index].source;
+      const state = sourceResults.get(source) || { successes: 0, fetched: 0, errors: [] };
+      if (result.status === 'fulfilled') {
+        state.successes += 1;
+        state.fetched += result.value.length;
+        posts.push(...result.value);
+      } else {
+        const message = result.reason instanceof Error ? result.reason.message : String(result.reason);
+        state.errors.push(message.replace(/https?:\/\/\S+/g, '[endpoint]'));
+      }
+      sourceResults.set(source, state);
+    });
+
+    const cutoff24h = Date.now() - 24 * 60 * 60_000;
+    const protectedPosts = deduplicateSocialPosts(posts)
+      .filter(post => new Date(post.postedAt).getTime() >= cutoff24h)
+      .sort((a, b) => new Date(b.postedAt).getTime() - new Date(a.postedAt).getTime())
+      .slice(0, 120)
+      .map(protectSocialIdentifiers);
+    const statuses = (['bluesky', 'mastodon'] as const).map(source => {
+      const state = sourceResults.get(source) || { successes: 0, fetched: 0, errors: ['not configured'] };
+      return {
+        source,
+        ok: state.successes > 0,
+        fetched: protectedPosts.filter(post => post.source === source).length,
+        error: state.errors.length > 0 ? [...new Set(state.errors)].join(' / ') : undefined,
+      };
+    });
+    const anySourceLive = statuses.some(status => status.ok);
+
+    if (!anySourceLive && socialCache) {
+      const staleResponse = { ...socialCache.response, isLive: false, sources: statuses };
+      res.setHeader('X-EarthSignal-Cache', 'STALE');
+      return res.status(200).json(staleResponse);
+    }
+
+    const response: SocialFetchResponse = {
+      posts: protectedPosts,
+      fetchedAt: new Date().toISOString(),
+      isLive: anySourceLive,
+      sources: statuses,
+    };
+    socialCache = { expiresAt: Date.now() + SOCIAL_CACHE_TTL_MS, response };
+    res.setHeader('Cache-Control', 'public, max-age=30, stale-while-revalidate=120');
+    return res.status(anySourceLive ? 200 : 502).json(
+      anySourceLive ? response : { ...response, error: '利用可能なSNS公開APIがありません' }
+    );
+  });
+
+  // 3. AI Explanation / Hypothesis Verification endpoint using Gemini API
   app.post('/api/ai/explain-anomaly', async (req, res) => {
     try {
       const { cellName, score, contributors, confounders } = req.body;
@@ -79,7 +221,7 @@ async function startServer() {
     }
   });
 
-  // 3. Vite middleware for development vs Static files for production
+  // 4. Vite middleware for development vs Static files for production
   if (process.env.NODE_ENV !== 'production') {
     const vite = await createViteServer({
       server: { middlewareMode: true },
