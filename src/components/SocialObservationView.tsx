@@ -61,6 +61,7 @@ const SOCIAL_SEARCH_SHORTCUTS: SocialSearchShortcut[] = [
   { source: 'bluesky', category: 'animal', query: KEYWORD_DICTIONARY.animal[8], label: '猫が隠れる', locationAware: true },
   { source: 'bluesky', category: 'animal', query: KEYWORD_DICTIONARY.animal[9], label: '魚が大量', locationAware: true },
   { source: 'bluesky', category: 'animal', query: KEYWORD_DICTIONARY.animal[10], label: 'クジラが打ち上げ', locationAware: true },
+  { source: 'bluesky', category: 'animal', query: KEYWORD_DICTIONARY.animal[11], label: '虫が急に静か', locationAware: true },
   { source: 'bluesky', category: 'shaking', query: KEYWORD_DICTIONARY.shaking[0], label: '揺れた気がする', locationAware: true },
   { source: 'bluesky', category: 'water', query: KEYWORD_DICTIONARY.water[0], label: '井戸水が濁った', locationAware: true },
   { source: 'mastodon', category: 'cloud', query: '地震雲', label: '#地震雲' },
@@ -194,6 +195,7 @@ export const SocialObservationView: React.FC<Props> = ({
 
   const windowHours = selectedWindow === '1h' ? 1 : selectedWindow === '6h' ? 6 : 24;
   const windowCutoff = Date.now() - windowHours * 60 * 60_000;
+  const nationalAnimalCutoff = Date.now() - 24 * 60 * 60_000;
   const windowedPosts = postsList.filter(p => {
     if (new Date(p.postedAt).getTime() < windowCutoff) return false;
     if (selectedCategory !== 'all' && p.category !== selectedCategory) return false;
@@ -204,8 +206,16 @@ export const SocialObservationView: React.FC<Props> = ({
   const nationalAnimalPosts = postsList.filter(post =>
     post.category === 'animal'
     && !post.isPostEventReaction
-    && new Date(post.postedAt).getTime() >= windowCutoff
+    && new Date(post.postedAt).getTime() >= nationalAnimalCutoff
   );
+  const national24hPosts = postsList.filter(post =>
+    !post.isPostEventReaction
+    && new Date(post.postedAt).getTime() >= nationalAnimalCutoff
+  );
+  const national24hSourceCounts = {
+    bluesky: national24hPosts.filter(post => post.source === 'bluesky').length,
+    mastodon: national24hPosts.filter(post => post.source === 'mastodon').length,
+  };
   const regionalAnimalPosts = nationalAnimalPosts.filter(post => post.h3Cell === selectedCell.id);
   const regionalAnimalActorCount = new Set(
     regionalAnimalPosts.map(post => post.actorIdHash || post.sourceIdHash)
@@ -525,7 +535,7 @@ export const SocialObservationView: React.FC<Props> = ({
             </div>
             <div className="p-3 rounded-xl bg-slate-50 dark:bg-slate-800/60 border border-slate-200/70 dark:border-slate-700/70">
               <div className="flex items-center gap-1.5 text-[11px] text-slate-500">
-                <Globe className="w-3.5 h-3.5" /> 全国SNS参考
+                <Globe className="w-3.5 h-3.5" /> 全国SNS参考・24h
               </div>
               <p className="mt-1 text-xl font-bold text-slate-900 dark:text-white">{nationalAnimalPosts.length}<span className="ml-1 text-xs font-normal text-slate-400">件</span></p>
             </div>
@@ -575,20 +585,21 @@ export const SocialObservationView: React.FC<Props> = ({
                   : `別日${summary.animalBaselineSampleCount}日と比較（中央値 ${summary.animalBaselineMedian}件 / MAD ${summary.animalBaselineMad}件）`}
               </p>
             </div>
-            {(regionalAnimalPosts.length > 0 || nationalAnimalPosts.length > 0) && (
-              <button
-                type="button"
-                onClick={() => {
-                  setSelectedCategory('animal');
-                  setSelectedSource('all');
-                  setRecordView(regionalAnimalPosts.length > 0 ? 'regional' : 'national');
-                  requestAnimationFrame(() => document.getElementById('structured-social-records')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
-                }}
-                className="shrink-0 px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold transition-colors"
-              >
-                該当する実在投稿を確認
-              </button>
-            )}
+            <button
+              type="button"
+              onClick={() => {
+                setSelectedCategory('animal');
+                setSelectedSource('all');
+                if (regionalAnimalPosts.length === 0 && nationalAnimalPosts.length > 0) setSelectedWindow('24h');
+                setRecordView(regionalAnimalPosts.length > 0 ? 'regional' : nationalAnimalPosts.length > 0 ? 'national' : 'search');
+                requestAnimationFrame(() => document.getElementById('structured-social-records')?.scrollIntoView({ behavior: 'smooth', block: 'start' }));
+              }}
+              className="shrink-0 px-3 py-2 rounded-xl bg-indigo-600 hover:bg-indigo-700 text-white text-xs font-semibold transition-colors"
+            >
+              {regionalAnimalPosts.length > 0 || nationalAnimalPosts.length > 0
+                ? '該当する実在投稿を確認'
+                : '各SNSの動物関連検索を開く'}
+            </button>
           </div>
         </div>
 
@@ -646,19 +657,19 @@ export const SocialObservationView: React.FC<Props> = ({
 
           <div className="grid grid-cols-2 gap-3 text-xs">
             <div className="bg-slate-50 dark:bg-slate-800/60 p-3 rounded-xl border border-slate-200/60 dark:border-slate-700/60 space-y-1.5">
-              <span className="font-semibold text-slate-500">プラットフォーム別</span>
+              <span className="font-semibold text-slate-500">プラットフォーム別（地域 / 全国24h）</span>
               <div className="space-y-1 text-slate-700 dark:text-slate-300">
-                <div className="flex justify-between"><span>Bluesky:</span><span className="font-bold">{summary.sources.bluesky}件</span></div>
-                <div className="flex justify-between"><span>Mastodon:</span><span className="font-bold">{summary.sources.mastodon}件</span></div>
-                <div className="flex justify-between"><span>YouTube:</span><span className="font-bold">{summary.sources.youtube}件</span></div>
-                <div className="flex justify-between"><span>Misskey:</span><span className="font-bold">{summary.sources.misskey}件</span></div>
+                <div className="flex justify-between"><span>Bluesky:</span><span className="font-bold">{summary.sources.bluesky}件 / {national24hSourceCounts.bluesky}件</span></div>
+                <div className="flex justify-between"><span>Mastodon:</span><span className="font-bold">{summary.sources.mastodon}件 / {national24hSourceCounts.mastodon}件</span></div>
+                <div className="flex justify-between"><span>YouTube:</span><span className="font-bold text-slate-500">検索リンクのみ</span></div>
+                <div className="flex justify-between"><span>Misskey:</span><span className="font-bold text-slate-500">検索リンクのみ</span></div>
               </div>
             </div>
 
             <div className="bg-slate-50 dark:bg-slate-800/60 p-3 rounded-xl border border-slate-200/60 dark:border-slate-700/60 space-y-1.5">
               <span className="font-semibold text-slate-500">現在の分類方式</span>
               <div className="space-y-1 text-slate-700 dark:text-slate-300">
-                <div className="flex justify-between"><span>辞書・正規表現:</span><span className="font-bold">{summary.analysisModes.rules}件</span></div>
+                <div className="flex justify-between"><span>辞書・正規表現:</span><span className="font-bold">{summary.analysisModes.rules}件 / 全国{national24hPosts.length}件</span></div>
                 <div className="flex justify-between"><span>AI分類:</span><span className="font-bold">未使用</span></div>
                 <p className="text-[10px] text-slate-400 pt-1">分類理由を再現できるルール方式のみを使用中</p>
               </div>

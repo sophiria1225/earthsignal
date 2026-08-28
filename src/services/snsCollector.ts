@@ -10,7 +10,7 @@ import { fetchWithTimeout } from './http';
 // 7.3 検索語辞書
 export const KEYWORD_DICTIONARY: Record<SocialCategory, string[]> = {
   cloud: ['地震雲', '変な雲', '不思議な雲', '筋状の雲', '帯状雲', '放射状の雲', '空がおかしい', '空が光った', '発光現象', '竜巻のような雲'],
-  animal: ['犬が吠える', '犬がずっと', '犬が落ち着かない', '鳥が騒ぐ', '鳥が大量', 'カラスが騒ぐ', 'カラスが異常', '猫が落ち着かない', '猫が隠れる', '魚が大量', 'クジラが打ち上げ'],
+  animal: ['犬が吠える', '犬がずっと', '犬が落ち着かない', '鳥が騒ぐ', '鳥が大量', 'カラスが騒ぐ', 'カラスが異常', '猫が落ち着かない', '猫が隠れる', '魚が大量', 'クジラが打ち上げ', '虫が急に静か'],
   sound: ['地鳴り', '低い音', 'ゴーという音', '爆発音のような', '謎の音', '窓が振動', '遠くで雷のような音'],
   shaking: ['揺れた気がする', '微妙に揺れ', '何か揺れた', 'めまいか地震か', '微振動', '家具がカタカタ'],
   water: ['井戸水が濁った', '井戸の水位', '水が濁った', '温泉の温度変化', '潮が引いた'],
@@ -27,6 +27,19 @@ const QUOTATION_REGEX = /(ニュース|記事|引用|リポスト|RT|転載|報�
 const DIRECT_OBSERVATION_REGEX = /(見た|見える|聞こえ|感じた|している|なっている|今|現在|さっき|目の前)/i;
 const METAPHOR_CONTEXT_REGEX = /(ゲーム|漫画|アニメ|小説|映画|ライブ|コンサート|スタジアム|歓声|観客|喘ぎ|創作|二次創作)/i;
 const KNOWN_SOUND_SOURCE_REGEX = /(雷|落雷|花火|工事|解体|発破|飛行機|戦闘機|ヘリ|電車|列車|トラック|自衛隊|スピーカー|掃除機|洗濯機)/i;
+const KNOWN_ANIMAL_TRIGGER_REGEX = /(地震|揺れ|緊急地震速報|雷|落雷|花火|工事|サイレン|掃除機|引っ越し|来客|人の出入り|動物病院)/i;
+
+// SNS本文は「騒ぐ」だけでなく「騒いでる」等の活用形で書かれるため、
+// 語彙の完全一致に加えて生物種と行動語の近接パターンを使う。
+const ANIMAL_OBSERVATION_REGEXES = [
+  /犬.{0,16}(吠え|遠吠え|鳴き続|落ち着かな)/,
+  /猫.{0,16}(落ち着かな|隠れ|鳴き続|騒)/,
+  /(鳥|野鳥|カラス).{0,16}(騒|大量|群れ|一斉|静か)/,
+  /(魚|イワシ).{0,16}(大量|群れ|打ち上げ|漂着)/,
+  /(クジラ|鯨|イルカ).{0,16}(打ち上げ|漂着)/,
+  /(虫|カエル).{0,16}(静か|鳴かな|大量)/,
+  /(動物|ペット).{0,16}(騒|急に静か|異常|落ち着かな)/,
+];
 
 function stableTextId(value: string): string {
   let hash = 2166136261;
@@ -144,9 +157,11 @@ export function classifyTextByRules(text: string): {
   // 3. カテゴリマッチング
   for (const cat of ['cloud', 'animal', 'sound', 'shaking', 'water', 'device'] as SocialCategory[]) {
     const keywords = KEYWORD_DICTIONARY[cat];
-    const matched = keywords.some(k => norm.includes(k));
+    const matched = keywords.some(k => norm.includes(k))
+      || (cat === 'animal' && ANIMAL_OBSERVATION_REGEXES.some(pattern => pattern.test(norm)));
     if (matched) {
-      const hasKnownCause = (cat === 'sound' || cat === 'shaking') && KNOWN_SOUND_SOURCE_REGEX.test(norm);
+      const hasKnownCause = ((cat === 'sound' || cat === 'shaking') && KNOWN_SOUND_SOURCE_REGEX.test(norm))
+        || (cat === 'animal' && KNOWN_ANIMAL_TRIGGER_REGEX.test(norm));
       if (isHistorical || isNegated || isMetaphorical || isIndirectQuotation || hasKnownCause) {
         return { category: 'unrelated', confidence: 0.85, isNegated, isHistorical, isOfficialReaction: false };
       }

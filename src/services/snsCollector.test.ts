@@ -121,6 +121,10 @@ test('原因が雷と分かる音や比喩表現を観測投稿から除外す�
 });
 
 test('犬猫鳥類だけでなく魚類やクジラの行動言及も動物観測に分類する', () => {
+  assert.equal(classifyTextByRules('今日やたらカラス騒いでるしな〜').category, 'animal');
+  assert.equal(classifyTextByRules('近所の犬がずっと吠え続けている').category, 'animal');
+  assert.equal(classifyTextByRules('落雷の爆音で犬が吠え出した').category, 'unrelated');
+  assert.equal(classifyTextByRules('地震で揺れた後に猫が落ち着かない').category, 'unrelated');
   assert.equal(classifyTextByRules('千葉の海岸で魚が大量に集まっている').category, 'animal');
   assert.equal(classifyTextByRules('宮崎でクジラが打ち上げられた').category, 'animal');
   assert.equal(classifyTextByRules('猫が落ち着かないで隠れる').category, 'animal');
